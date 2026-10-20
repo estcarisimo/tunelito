@@ -1,0 +1,19 @@
+[package]
+name = "tunelito-priv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Privileged helper for Tunelito: users, sshd drop-in, authorized_keys"
+publish = false
+
+[[bin]]
+name = "tunelito-priv"
+path = "src/main.rs"
+
+[dependencies]
+tunelito-core.workspace = true
+clap.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,117 @@
+{
+  "app": {
+    "title": "Tunelito",
+    "subtitle": "Let someone you trust reach this computer over SSH."
+  },
+  "lang": {
+    "en": "English",
+    "es": "Español"
+  },
+  "warning": {
+    "title": "Only do this with someone you know.",
+    "body": "Turning this on gives that person control of the tunelito account and of the devices that account can open, such as a TV over USB. It is enough to cause real harm. If someone you do not know asks you to turn this on, say no."
+  },
+  "switch": {
+    "on": "On",
+    "off": "Off",
+    "starting": "Starting…",
+    "turn_on": "Turn on",
+    "turn_off": "Turn off",
+    "confirm_on": "Turn on access?",
+    "confirm_on_body": "The person whose key you added will be able to connect until the timer runs out or you turn this off.",
+    "confirm": "Yes, turn it on",
+    "cancel": "Cancel",
+    "need_key": "Add your helper's public key before turning this on."
+  },
+  "timer": {
+    "label": "Turns off by itself",
+    "remaining": "Turns off automatically in {time}",
+    "option_30m": "30 minutes",
+    "option_1h": "1 hour",
+    "option_2h": "2 hours",
+    "option_4h": "4 hours",
+    "option_8h": "8 hours",
+    "option_24h": "24 hours"
+  },
+  "connected": {
+    "label": "Someone is connected",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "tunnel": {
+    "hostname": "Name to send your helper",
+    "copy": "Copy",
+    "copied": "Copied",
+    "waiting": "Opening the tunnel…",
+    "off_hint": "Turn it on to get a name you can send.",
+    "snippet": "Text for your helper's SSH config",
+    "snippet_help": "Your helper can paste this, or run tunelito-connect with the name above.",
+    "copy_snippet": "Copy SSH config"
+  },
+  "keys": {
+    "title": "Accepted keys",
+    "help": "Paste the public key your helper sent you, for example on WhatsApp.",
+    "placeholder": "ssh-ed25519 AAAA… comment",
+    "add": "Add key",
+    "remove": "Remove",
+    "empty": "No keys yet.",
+    "fingerprint": "Fingerprint",
+    "comment": "Comment",
+    "added": "Added",
+    "revoke_on_off": "Also forget the keys when turning off"
+  },
+  "sessions": {
+    "title": "Connections",
+    "empty": "No connections yet.",
+    "active": "Active",
+    "ended": "Ended",
+    "user": "User",
+    "started": "Started",
+    "ended_at": "Ended",
+    "observed_peer": "Address seen by this computer",
+    "loopback_note": "Through the Cloudflare tunnel, this computer only sees 127.0.0.1. The real address is not visible here.",
+    "reported_by_client": "Reported by the client (unverified)",
+    "ip": "Public IP",
+    "asn": "ASN",
+    "rdns": "Reverse DNS",
+    "os": "Operating system",
+    "no_hello": "No hello from the helper yet.",
+    "unmatched_hello": "A hello arrived that did not match a session."
+  },
+  "settings": {
+    "title": "Settings"
+  },
+  "activity": {
+    "downloading_cloudflared": "Downloading cloudflared…",
+    "starting_sshd": "Preparing SSH…",
+    "starting_tunnel": "Opening the tunnel…",
+    "ready": "Ready"
+  },
+  "platform": {
+    "linux_note": "Linux service commands are planned and unit-tested. CI does not start sshd or open a public tunnel.",
+    "untested_note": "Windows and macOS service control is implemented and not executed in CI.",
+    "details": "Technical details"
+  },
+  "errors": {
+    "invalid_public_key": "That does not look like a public key.",
+    "private_key_rejected": "That is a private key. Paste the public key only.",
+    "duplicate_key": "That key is already added.",
+    "key_not_found": "That key is not in the list.",
+    "key_required": "Add a public key before turning this on.",
+    "checksum_mismatch": "The downloaded cloudflared file did not match its checksum. It was not saved.",
+    "unsupported_platform": "This kind of computer is not supported for the cloudflared download.",
+    "invalid_hostname": "That tunnel name does not look valid.",
+    "invalid_hello": "The hello message could not be read.",
+    "unsafe_sshd_dropin": "The SSH configuration was rejected.",
+    "needs_admin": "An administrator password is required to prepare SSH.",
+    "refused_user": "That account name is not allowed.",
+    "prepare_failed": "SSH could not be prepared.",
+    "download_failed": "cloudflared could not be downloaded.",
+    "tunnel_exited": "The tunnel stopped. Access is off.",
+    "io": "A file could not be read or written.",
+    "generic": "Something went wrong."
+  },
+  "dialog": {
+    "close": "Close"
+  }
+}

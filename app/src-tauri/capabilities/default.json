@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window of the Tunelito host app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-get-state",
+    "allow-add-key",
+    "allow-remove-key",
+    "allow-turn-on",
+    "allow-turn-off",
+    "allow-update-settings",
+    "allow-refresh"
+  ]
+}
