@@ -12,8 +12,13 @@ app/src-tauri/binaries
 .vscode
 cloudflared
 cloudflared.exe
+embed/
+site/
+.docs-venv/
 *.pem
 *.p12
 *.pfx
 .env
 .env.*
+site/
+.docs-venv/

@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "Tunelito",
-    "subtitle": "Dejá que una persona de confianza llegue a esta computadora por SSH."
+    "subtitle": "Abrilo, pegá la clave, y mandales la dirección."
   },
   "lang": {
     "en": "English",
@@ -9,7 +9,7 @@
   },
   "warning": {
     "title": "Solo hacé esto con alguien que conocés.",
-    "body": "Encenderlo le da a esa persona control de la cuenta tunelito y de los dispositivos que esa cuenta puede abrir, como un televisor por USB. Alcanza para hacer daño de verdad. Si alguien que no conocés te pide que lo enciendas, decí que no."
+    "body": "Si un desconocido te pide que pegues una clave, decí que no."
   },
   "switch": {
     "on": "Encendido",
@@ -17,8 +17,8 @@
     "starting": "Encendiendo…",
     "turn_on": "Encender",
     "turn_off": "Apagar",
-    "confirm_on": "¿Encender el acceso?",
-    "confirm_on_body": "La persona cuya clave agregaste va a poder conectarse hasta que se acabe el tiempo o lo apagues.",
+    "confirm_on": "¿Lo encendés?",
+    "confirm_on_body": "Eso le da una shell en esta computadora.",
     "confirm": "Sí, encender",
     "cancel": "Cancelar",
     "need_key": "Agregá la clave pública de quien te ayuda antes de encender."
@@ -41,15 +41,17 @@
   "tunnel": {
     "hostname": "Nombre para enviarle a quien te ayuda",
     "copy": "Copiar",
+    "share": "Compartir",
     "copied": "Copiado",
     "waiting": "Abriendo el túnel…",
     "off_hint": "Encendelo para obtener un nombre que puedas enviar.",
     "snippet": "Texto para la configuración SSH de quien te ayuda",
-    "snippet_help": "Quien te ayuda puede pegar esto, o ejecutar tunelito-connect con el nombre de arriba.",
+    "snippet_help": "Quien te ayuda pega esto en ~/.ssh/config, instala cloudflared, y corre ssh con ese nombre.",
     "copy_snippet": "Copiar configuración SSH"
   },
   "keys": {
     "title": "Claves aceptadas",
+    "label": "Pegá la clave que te mandaron",
     "help": "Pegá la clave pública que te mandaron, por ejemplo por WhatsApp.",
     "placeholder": "ssh-ed25519 AAAA… comentario",
     "add": "Agregar clave",
@@ -75,11 +77,14 @@
     "asn": "ASN",
     "rdns": "DNS inverso",
     "os": "Sistema operativo",
-    "no_hello": "Quien ayuda todavía no envió un hello.",
+    "no_hello": "Sin datos del cliente.",
     "unmatched_hello": "Llegó un hello que no coincide con una sesión."
   },
   "settings": {
     "title": "Ajustes"
+  },
+  "more": {
+    "summary": "Detalles"
   },
   "activity": {
     "downloading_cloudflared": "Descargando cloudflared…",

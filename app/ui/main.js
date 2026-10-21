@@ -128,12 +128,10 @@ function connectedSample() {
     `Host ${host}`,
     `HostName ${host}`,
     "User tunelito",
-    "IdentityFile ~/.ssh/tunelito_ed25519",
+    "IdentityFile ~/.ssh/id_ed25519",
     "IdentitiesOnly yes",
     "StrictHostKeyChecking accept-new",
     "ProxyCommand cloudflared access ssh --hostname %h",
-    "PermitLocalCommand yes",
-    "LocalCommand sh -c 'command -v tunelito-connect >/dev/null 2>&1 && tunelito-connect hello --hostname %h --quiet --once || true'",
     `# END tunelito ${host}`,
     "",
   ].join("\n");
@@ -300,7 +298,9 @@ function switchLabel() {
 }
 
 function renderHello(hello) {
-  if (!hello) return el("p", { class: "meta", text: t("sessions.no_hello") });
+  if (!hello) {
+    return el("p", { class: "meta", "data-testid": "no-client-info", text: t("sessions.no_hello") });
+  }
   const rows = [
     ["sessions.ip", hello.public_ip],
     ["sessions.asn", hello.asn],
@@ -319,6 +319,7 @@ function render() {
   document.documentElement.lang = lang;
   document.title = t("app.title");
   const phase = view?.phase || "off";
+  const on = phase === "on" || phase === "starting";
   app.replaceChildren(
     el("header", { class: "top" }, [
       el("div", {}, [
@@ -340,10 +341,7 @@ function render() {
         }),
       ]),
     ]),
-    el("section", { class: "warning", role: "note" }, [
-      el("strong", { text: t("warning.title") }),
-      el("span", { text: t("warning.body") }),
-    ]),
+    el("p", { class: "warning line", role: "note", text: t("warning.title") }),
     view?.error_code
       ? el("section", { class: "error", role: "alert" }, [
           el("strong", { text: t(`errors.${view.error_code}`) }),
@@ -353,164 +351,15 @@ function render() {
         ])
       : null,
     el("div", { class: "grid" }, [
-      el("section", { class: "card" }, [
-        el("button", {
-          type: "button",
-          class: `switch ${phase}`,
-          "data-testid": "power",
-          "aria-pressed": phase === "on",
-          disabled: busy || phase === "starting",
-          text: switchLabel(),
-          onclick: onPower,
-        }),
-        view?.activity && phase !== "off"
-          ? el("p", { class: "meta", text: t(`activity.${view.activity}`) })
-          : null,
-        el("div", { class: "presence", "data-testid": "presence" }, [
-          el("span", { class: view?.someone_connected ? "dot live" : "dot" }),
-          el("span", {
-            text: `${t("connected.label")}: ${view?.someone_connected ? t("connected.yes") : t("connected.no")}`,
-          }),
-        ]),
-        el("label", { class: "field" }, [
-          t("timer.label"),
-          (() => {
-            const select = el("select", {
-              "data-testid": "timer",
-              onchange: (event) =>
-                run("update_settings", {
-                  settings: {
-                    ...view.settings,
-                    auto_off_secs: Number(event.target.value),
-                  },
-                }),
-            });
-            for (const [secs, key] of TIMERS) {
-              const option = el("option", { value: secs, text: t(key) });
-              if (Number(view.settings.auto_off_secs) === secs) option.selected = true;
-              select.append(option);
-            }
-            return select;
-          })(),
-        ]),
-        view?.seconds_remaining != null && phase !== "off"
-          ? el("p", {
-              class: "meta",
-              text: t("timer.remaining", { time: formatRemaining(view.seconds_remaining) }),
-            })
-          : null,
-        renderTunnel(),
-      ]),
-      el("section", { class: "card" }, [
-        el("h2", { text: t("keys.title") }),
-        el("p", { class: "help", text: t("keys.help") }),
-        el("textarea", {
-          "data-testid": "key-input",
-          placeholder: t("keys.placeholder"),
-          oninput: (event) => {
-            draft = event.target.value;
-          },
-        }),
-        el("div", { class: "row" }, [
-          el("button", {
-            type: "button",
-            class: "primary",
-            "data-testid": "add-key",
-            text: t("keys.add"),
-            disabled: busy,
-            onclick: () => run("add_key", { text: draft }),
-          }),
-        ]),
-        el("label", { class: "check" }, [
-          (() => {
-            const box = el("input", {
-              type: "checkbox",
-              "data-testid": "revoke",
-              onchange: (event) =>
-                run("update_settings", {
-                  settings: {
-                    ...view.settings,
-                    revoke_keys_on_off: event.target.checked,
-                  },
-                }),
-            });
-            box.checked = Boolean(view.settings.revoke_keys_on_off);
-            return box;
-          })(),
-          el("span", { text: t("keys.revoke_on_off") }),
-        ]),
-        view.keys.length
-          ? el(
-              "div",
-              {},
-              view.keys.map((key) =>
-                el("article", { class: "keys" }, [
-                  el("div", { class: "key-top" }, [
-                    el("strong", { text: key.comment || key.key_type }),
-                    el("button", {
-                      type: "button",
-                      class: "ghost",
-                      text: t("keys.remove"),
-                      onclick: () => run("remove_key", { fingerprint: key.fingerprint }),
-                    }),
-                  ]),
-                  el("p", { class: "meta", text: `${t("keys.fingerprint")}: ${key.fingerprint}` }),
-                  el("p", { class: "meta", text: `${t("keys.added")}: ${formatWhen(key.added_at)}` }),
-                ]),
-              ),
-            )
-          : el("p", { class: "help", text: t("keys.empty") }),
-      ]),
-      el("section", { class: "card sessions" }, [
-        el("h2", { text: t("sessions.title") }),
-        view.sessions.length
-          ? el(
-              "div",
-              {},
-              view.sessions.map((session) =>
-                el("article", { class: "session", "data-testid": "session" }, [
-                  el("div", { class: "session-top" }, [
-                    el("strong", { class: "session-title" }, [
-                      el("span", { class: session.active ? "dot live" : "dot" }),
-                      session.active ? t("sessions.active") : t("sessions.ended"),
-                    ]),
-                    el("span", { class: "meta", text: session.user }),
-                  ]),
-                  el("p", {
-                    class: "meta",
-                    text: `${t("keys.fingerprint")}: ${session.fingerprint || "—"}`,
-                  }),
-                  el("p", {
-                    class: "meta",
-                    text: `${t("sessions.started")}: ${formatWhen(session.started_at)}`,
-                  }),
-                  session.ended_at
-                    ? el("p", {
-                        class: "meta",
-                        text: `${t("sessions.ended_at")}: ${formatWhen(session.ended_at)}`,
-                      })
-                    : null,
-                  el("p", {
-                    class: "meta",
-                    text: `${t("sessions.observed_peer")}: ${session.observed_peer}`,
-                  }),
-                  session.loopback
-                    ? el("p", { class: "meta", text: t("sessions.loopback_note") })
-                    : null,
-                  renderHello(session.hello),
-                ]),
-              ),
-            )
-          : el("p", { class: "help", text: t("sessions.empty") }),
-        view.unmatched_hellos?.length
-          ? el("p", { class: "meta", text: t("sessions.unmatched_hello") })
-          : null,
-      ]),
+      el("section", { class: "card main" }, [phase === "off" ? renderPaste() : renderLive(phase)]),
     ]),
-    el("details", { class: "tech" }, [
-      el("summary", { text: t("platform.details") }),
-      el("p", { text: t("platform.linux_note") }),
-      el("p", { text: t("platform.untested_note") }),
+    el("details", { class: "more", "data-testid": "more" }, [
+      el("summary", { text: t("more.summary") }),
+      renderTimer(),
+      renderPresence(),
+      renderKeyList(),
+      renderSessions(),
+      phase === "off" ? null : renderSnippet(),
     ]),
     dialog ? renderDialog() : null,
   );
@@ -522,44 +371,203 @@ function render() {
   }
 }
 
-function renderTunnel() {
-  if (view.phase === "off") {
-    return el("p", { class: "help", text: t("tunnel.off_hint") });
-  }
+function renderPaste() {
+  return el("div", { class: "paste" }, [
+    el("label", { class: "paste-label", for: "key-input", text: t("keys.label") }),
+    el("textarea", {
+      id: "key-input",
+      "data-testid": "key-input",
+      placeholder: t("keys.placeholder"),
+      oninput: (event) => {
+        draft = event.target.value;
+      },
+    }),
+    el("button", {
+      type: "button",
+      class: "switch off",
+      "data-testid": "power",
+      disabled: busy,
+      text: t("switch.turn_on"),
+      onclick: onPower,
+    }),
+  ]);
+}
+
+function renderLive(phase) {
   const waiting = !view.hostname;
-  return el("div", {}, [
-    el("div", { class: "hostname" }, [
-      el("strong", { text: t("tunnel.hostname") }),
-      el("code", {
-        "data-testid": "hostname",
-        text: waiting ? t("tunnel.waiting") : view.hostname,
-      }),
-      waiting
-        ? null
-        : el("button", {
+  return el("div", { class: "live" }, [
+    phase === "starting" || (view.activity && waiting)
+      ? el("p", { class: "meta", text: t(`activity.${view.activity || "starting_tunnel"}`) })
+      : null,
+    el("p", { class: "url-label", text: t("tunnel.hostname") }),
+    el("code", {
+      class: "url",
+      "data-testid": "hostname",
+      text: waiting ? t("tunnel.waiting") : view.hostname,
+    }),
+    waiting
+      ? null
+      : el("div", { class: "share-row" }, [
+          el("button", {
             type: "button",
-            class: "copy",
+            class: "share",
             "data-copy": "host",
             "data-testid": "copy-host",
             text: t("tunnel.copy"),
             onclick: () => copyText(view.hostname, "host"),
           }),
-    ]),
-    view.ssh_snippet
-      ? el("div", { class: "snippet" }, [
-          el("strong", { text: t("tunnel.snippet") }),
-          el("p", { class: "help", text: t("tunnel.snippet_help") }),
-          el("pre", { text: view.ssh_snippet }),
           el("button", {
             type: "button",
-            class: "copy",
-            "data-copy": "snippet",
-            "data-testid": "copy-snippet",
-            text: t("tunnel.copy_snippet"),
-            onclick: () => copyText(view.ssh_snippet, "snippet"),
+            class: "share",
+            "data-copy": "share",
+            "data-testid": "share-host",
+            text: t("tunnel.share"),
+            onclick: shareUrl,
           }),
-        ])
+        ]),
+    el("button", {
+      type: "button",
+      class: "ghost off-button",
+      "data-testid": "turn-off",
+      disabled: busy || phase === "starting",
+      text: t("switch.turn_off"),
+      onclick: () => run("turn_off", { revoke_keys: Boolean(view.settings.revoke_keys_on_off) }),
+    }),
+  ]);
+}
+
+function renderTimer() {
+  return el("label", { class: "field" }, [
+    t("timer.label"),
+    (() => {
+      const select = el("select", {
+        "data-testid": "timer",
+        onchange: (event) =>
+          run("update_settings", {
+            settings: { ...view.settings, auto_off_secs: Number(event.target.value) },
+          }),
+      });
+      for (const [secs, key] of TIMERS) {
+        const option = el("option", { value: secs, text: t(key) });
+        if (Number(view.settings.auto_off_secs) === secs) option.selected = true;
+        select.append(option);
+      }
+      return select;
+    })(),
+    view?.seconds_remaining != null && view.phase !== "off"
+      ? el("span", {
+          class: "meta",
+          text: t("timer.remaining", { time: formatRemaining(view.seconds_remaining) }),
+        })
       : null,
+  ]);
+}
+
+function renderPresence() {
+  return el("div", { class: "presence", "data-testid": "presence" }, [
+    el("span", { class: view?.someone_connected ? "dot live" : "dot" }),
+    el("span", {
+      text: `${t("connected.label")}: ${view?.someone_connected ? t("connected.yes") : t("connected.no")}`,
+    }),
+  ]);
+}
+
+function renderKeyList() {
+  return el("section", {}, [
+    el("h2", { text: t("keys.title") }),
+    view.keys.length
+      ? el(
+          "div",
+          {},
+          view.keys.map((key) =>
+            el("article", { class: "keys" }, [
+              el("div", { class: "key-top" }, [
+                el("strong", { text: key.comment || key.key_type }),
+                el("button", {
+                  type: "button",
+                  class: "ghost",
+                  text: t("keys.remove"),
+                  onclick: () => run("remove_key", { fingerprint: key.fingerprint }),
+                }),
+              ]),
+              el("p", { class: "meta", text: `${t("keys.fingerprint")}: ${key.fingerprint}` }),
+              el("p", { class: "meta", text: `${t("keys.added")}: ${formatWhen(key.added_at)}` }),
+            ]),
+          ),
+        )
+      : el("p", { class: "help", text: t("keys.empty") }),
+    el("label", { class: "check" }, [
+      (() => {
+        const box = el("input", {
+          type: "checkbox",
+          "data-testid": "revoke",
+          onchange: (event) =>
+            run("update_settings", {
+              settings: { ...view.settings, revoke_keys_on_off: event.target.checked },
+            }),
+        });
+        box.checked = Boolean(view.settings.revoke_keys_on_off);
+        return box;
+      })(),
+      el("span", { text: t("keys.revoke_on_off") }),
+    ]),
+  ]);
+}
+
+function renderSessions() {
+  return el("section", { class: "sessions" }, [
+    el("h2", { text: t("sessions.title") }),
+    view.sessions.length
+      ? el(
+          "div",
+          {},
+          view.sessions.map((session) =>
+            el("article", { class: "session", "data-testid": "session" }, [
+              el("div", { class: "session-top" }, [
+                el("strong", { class: "session-title" }, [
+                  el("span", { class: session.active ? "dot live" : "dot" }),
+                  session.active ? t("sessions.active") : t("sessions.ended"),
+                ]),
+                el("span", { class: "meta", text: session.user }),
+              ]),
+              el("p", { class: "meta", text: `${t("keys.fingerprint")}: ${session.fingerprint || "—"}` }),
+              el("p", { class: "meta", text: `${t("sessions.started")}: ${formatWhen(session.started_at)}` }),
+              session.ended_at
+                ? el("p", {
+                    class: "meta",
+                    text: `${t("sessions.ended_at")}: ${formatWhen(session.ended_at)}`,
+                  })
+                : null,
+              el("p", {
+                class: "meta",
+                text: `${t("sessions.observed_peer")}: ${session.observed_peer}`,
+              }),
+              session.loopback ? el("p", { class: "meta", text: t("sessions.loopback_note") }) : null,
+              renderHello(session.hello),
+            ]),
+          ),
+        )
+      : el("p", { class: "help", text: t("sessions.empty") }),
+    view.unmatched_hellos?.length
+      ? el("p", { class: "meta", text: t("sessions.unmatched_hello") })
+      : null,
+  ]);
+}
+
+function renderSnippet() {
+  if (!view.ssh_snippet) return null;
+  return el("div", { class: "snippet" }, [
+    el("strong", { text: t("tunnel.snippet") }),
+    el("p", { class: "help", text: t("tunnel.snippet_help") }),
+    el("pre", { text: view.ssh_snippet }),
+    el("button", {
+      type: "button",
+      class: "copy",
+      "data-copy": "snippet",
+      "data-testid": "copy-snippet",
+      text: t("tunnel.copy_snippet"),
+      onclick: () => copyText(view.ssh_snippet, "snippet"),
+    }),
   ]);
 }
 
@@ -584,24 +592,70 @@ function renderDialog() {
           class: "primary",
           "data-testid": "confirm-on",
           text: t("switch.confirm"),
-          onclick: () => run("turn_on"),
+          onclick: () => confirmOn(),
         }),
       ]),
     ]),
   ]);
 }
 
+function looksLikeKey(text) {
+  return text
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .some((item) => /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256)\s+\S+/.test(item));
+}
+
 function onPower() {
-  if (view.phase === "on") {
-    run("turn_off", { revoke_keys: Boolean(view.settings.revoke_keys_on_off) });
+  const text = draft.trim();
+  if (/PRIVATE KEY/.test(text)) {
+    setView({ ...view, error_code: "private_key_rejected", error_detail: null }, true);
     return;
   }
-  if (view.keys.length === 0) {
+  if (text && !looksLikeKey(text)) {
+    setView({ ...view, error_code: "invalid_public_key", error_detail: null }, true);
+    return;
+  }
+  if (!text && view.keys.length === 0) {
     setView({ ...view, error_code: "key_required", error_detail: null }, true);
     return;
   }
   dialog = true;
   render();
+}
+
+async function confirmOn() {
+  dialog = false;
+  const text = draft.trim();
+  if (text) {
+    try {
+      view = await call("add_key", { text });
+      draft = "";
+    } catch (err) {
+      const parsed = readError(err);
+      if (parsed.code !== "duplicate_key") {
+        setView(
+          { ...(view || emptyView()), error_code: parsed.code, error_detail: parsed.detail || null },
+          true,
+        );
+        return;
+      }
+    }
+  }
+  await run("turn_on");
+}
+
+async function shareUrl() {
+  const text = view.hostname || "";
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: t("app.title"), text });
+      return;
+    } catch {
+      /* fall through to copy */
+    }
+  }
+  await copyText(text, "share");
 }
 
 function chooseLang(next) {
