@@ -18,10 +18,14 @@ pub const MARKER_END: &str = "# END tunelito";
 pub const SSHD_CONFIG: &str = r"C:\ProgramData\ssh\sshd_config";
 pub const ADMIN_KEYS: &str = r"C:\ProgramData\ssh\administrators_authorized_keys";
 pub const USER_HOME: &str = r"C:\Users\tunelito";
-/// Not the profile `.ssh` file. Windows adds an app-package access entry to
-/// the profile directory, and sshd then ignores the key.
+/// Beside the service, so an administrator Match cannot point sshd elsewhere.
+/// sshd reads this file while impersonating the user, so that user must be able to read it.
 pub const USER_KEYS: &str = r"C:\ProgramData\ssh\tunelito_authorized_keys";
 pub const USER_SSH_DIR: &str = r"C:\Users\tunelito\.ssh";
+/// Stock `sshd_config` sets `AuthorizedKeysFile .ssh/authorized_keys` before any
+/// Match block. OpenSSH keeps that path unless a Match replaces it, so the same
+/// key has to live here too.
+pub const PROFILE_KEYS: &str = r"C:\Users\tunelito\.ssh\authorized_keys";
 pub const HELLO_DIR: &str = r"C:\ProgramData\tunelito\hellos";
 pub const STATE_DIR: &str = r"C:\ProgramData\tunelito";
 pub const REQUEST_FILE: &str = r"C:\ProgramData\tunelito\request.json";
@@ -29,9 +33,8 @@ pub const RESULT_FILE: &str = r"C:\ProgramData\tunelito\result.json";
 pub const PRIV_INSTALL: &str = r"C:\ProgramData\tunelito\bin\tunelito-priv.exe";
 pub const TASK_NAME: &str = "TunelitoPriv";
 
-/// OpenSSH ignores a profile key file: the profile directory carries an
-/// app-package access entry sshd will not accept. Administrators keep the
-/// shared administrators file. Everyone else uses the ProgramData file.
+/// Administrators share one key file. Everyone else uses the ProgramData file,
+/// with the same lines copied to the profile path stock sshd already names.
 pub fn authorized_keys_path(account_is_admin: bool) -> &'static str {
     if account_is_admin {
         ADMIN_KEYS
@@ -142,7 +145,7 @@ fn match_block() -> String {
         "{MARKER_BEGIN}\n\
          # Managed by tunelito. Safe to delete; the app recreates it.\n\
          Match User {DEDICATED_USER}\n    \
-         AuthorizedKeysFile C:/ProgramData/ssh/tunelito_authorized_keys\n    \
+         AuthorizedKeysFile __PROGRAMDATA__/ssh/tunelito_authorized_keys .ssh/authorized_keys\n    \
          PasswordAuthentication no\n    \
          KbdInteractiveAuthentication no\n    \
          PubkeyAuthentication yes\n    \
@@ -249,6 +252,14 @@ pub fn write_windows_access_files(
         let body = upsert_authorized_keys(&existing_keys, &plan.authorized_key_lines);
         write_text(&path, &body)?;
         written.push(path);
+        if !plan.account_is_admin {
+            let profile = under_root(root, PROFILE_KEYS);
+            let existing_profile = fs::read_to_string(&profile).unwrap_or_default();
+            let profile_body =
+                upsert_authorized_keys(&existing_profile, &plan.authorized_key_lines);
+            write_text(&profile, &profile_body)?;
+            written.push(profile);
+        }
     }
     let hellos = under_root(root, HELLO_DIR);
     fs::create_dir_all(&hellos)?;
@@ -269,28 +280,40 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
     if account_is_admin {
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(ADMIN_KEYS, &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)"], true),
+            &acl_script(
+                ADMIN_KEYS,
+                &[("S-1-5-18", "FullControl"), ("S-1-5-32-544", "FullControl")],
+                true,
+            ),
         ));
     } else {
-        // sshd runs as SYSTEM. A grant without parentheses around the right
-        // is ignored, so SYSTEM could not read the key file.
+        // Replace the whole DACL. icacls /grant leaves the app-package entry
+        // Windows puts on a new profile, and sshd then ignores the key.
+        // sshd opens the key file while impersonating tunelito, so that account
+        // needs Read on every file the Match block names.
+        let profile = [
+            ("S-1-5-18", "FullControl"),
+            ("S-1-5-32-544", "FullControl"),
+            ("tunelito", "FullControl"),
+        ];
+        steps.push(ps("acl_profile", &acl_script(USER_HOME, &profile, false)));
         steps.push(ps(
-            "acl_profile",
-            &acl_script(
-                USER_HOME,
-                &[
-                    "*S-1-5-18:(OI)(CI)(F)",
-                    "*S-1-5-32-544:(OI)(CI)(F)",
-                    "tunelito:(OI)(CI)(F)",
-                ],
-                false,
-            ),
+            "acl_ssh_dir",
+            &acl_script(USER_SSH_DIR, &profile, false),
+        ));
+        steps.push(ps(
+            "acl_profile_keys",
+            &acl_script(PROFILE_KEYS, &profile, true),
         ));
         steps.push(ps(
             "acl_authorized_keys",
             &acl_script(
                 USER_KEYS,
-                &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)", "tunelito:(R)"],
+                &[
+                    ("S-1-5-18", "FullControl"),
+                    ("S-1-5-32-544", "FullControl"),
+                    ("tunelito", "Read"),
+                ],
                 true,
             ),
         ));
@@ -299,33 +322,60 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
         "acl_request_dir",
         &acl_script(
             STATE_DIR,
-            &["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(F)"],
+            &[("S-1-5-18", "FullControl"), ("S-1-5-32-545", "FullControl")],
             false,
         ),
     ));
     steps
 }
 
-fn acl_script(path: &str, grants: &[&str], set_owner: bool) -> String {
+/// `grants` are `(sid or account, FileSystemRights)`. A fresh DACL drops every
+/// other entry, including app-package access inherited from the profile.
+fn acl_script(path: &str, grants: &[(&str, &str)], set_owner: bool) -> String {
+    let path = path.replace('\'', "");
     let mut script = format!(
         "$path = '{path}'; \
          if (-not (Test-Path -LiteralPath $path)) {{ throw \"missing $path\" }}; \
-         $icacls = Join-Path $env:SystemRoot 'System32\\icacls.exe'; \
-         & $icacls $path /inheritance:r; \
-         if ($LASTEXITCODE -ne 0) {{ throw \"icacls inheritance failed on $path\" }};",
-        path = path.replace('\'', ""),
+         $item = Get-Item -LiteralPath $path -Force; \
+         $acl = if ($item.PSIsContainer) {{ New-Object System.Security.AccessControl.DirectorySecurity }} else {{ New-Object System.Security.AccessControl.FileSecurity }}; \
+         $acl.SetAccessRuleProtection($true, $false); \
+         $inherit = if ($item.PSIsContainer) {{ [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' }} else {{ [System.Security.AccessControl.InheritanceFlags]::None }}; \
+         $prop = [System.Security.AccessControl.PropagationFlags]::None; \
+         $allow = [System.Security.AccessControl.AccessControlType]::Allow;"
     );
-    for grant in grants {
-        let grant = grant.replace('\'', "");
+    if grants
+        .iter()
+        .any(|(identity, _)| !identity.starts_with("S-1-"))
+    {
+        script.push_str(
+            " $userAccount = Get-CimInstance -ClassName Win32_UserAccount -Filter \"Name='tunelito' and LocalAccount=True\"; \
+             if (-not $userAccount) { throw 'tunelito has no account' }; \
+             $userSid = New-Object System.Security.Principal.SecurityIdentifier ([string]$userAccount.SID);",
+        );
+    }
+    for (identity, rights) in grants {
+        let identity = identity.replace('\'', "");
+        let rights = rights.replace('\'', "");
+        let identity_expr = if identity.starts_with("S-1-") {
+            format!("New-Object System.Security.Principal.SecurityIdentifier '{identity}'")
+        } else if identity == "tunelito" {
+            "$userSid".to_string()
+        } else {
+            format!("New-Object System.Security.Principal.NTAccount '{identity}'")
+        };
         script.push_str(&format!(
-            " & $icacls $path /grant:r '{grant}'; \
-             if ($LASTEXITCODE -ne 0) {{ throw \"icacls grant failed on $path\" }};"
+            " $id = {identity_expr}; \
+             $rights = [System.Security.AccessControl.FileSystemRights]'{rights}'; \
+             $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($id, $rights, $inherit, $prop, $allow); \
+             $acl.AddAccessRule($rule);"
         ));
     }
+    script.push_str(" $item.SetAccessControl($acl);");
     if set_owner {
         // sshd accepts the key only when the owner is SYSTEM, Administrators, or the account.
         script.push_str(
-            " & $icacls $path /setowner *S-1-5-18; \
+            " $icacls = Join-Path $env:SystemRoot 'System32\\icacls.exe'; \
+             & $icacls $path /setowner *S-1-5-18; \
              if ($LASTEXITCODE -ne 0) { throw \"icacls owner failed on $path\" };",
         );
     }
@@ -479,8 +529,11 @@ Match Group administrators\n\
             .collect::<Vec<_>>()
             .join("\n");
         assert!(user_blob.contains(USER_KEYS));
+        assert!(user_blob.contains(PROFILE_KEYS));
+        assert!(user_blob.contains(USER_SSH_DIR));
         assert!(user_blob.contains("S-1-5-18"));
-        assert!(user_blob.contains("tunelito:(R)"));
+        assert!(user_blob.contains("tunelito"));
+        assert!(user_blob.contains("Read"));
         assert!(user_blob.contains("S-1-5-32-545"));
         assert!(user_blob.contains("S-1-5-32-544"));
         assert!(!user_blob.contains(ADMIN_KEYS));
@@ -539,9 +592,14 @@ Match Group administrators\n\
         let config_text = fs::read_to_string(&config).unwrap();
         assert!(config_text.contains("Match Group administrators"));
         assert!(config_text.contains("Match User tunelito"));
+        assert!(config_text.contains(
+            "AuthorizedKeysFile __PROGRAMDATA__/ssh/tunelito_authorized_keys .ssh/authorized_keys"
+        ));
         let keys = fs::read_to_string(under_root(&root, USER_KEYS)).unwrap();
         assert!(keys.contains("AAAAforeign"));
         assert!(keys.contains(&parsed.public_key));
+        let profile = fs::read_to_string(under_root(&root, PROFILE_KEYS)).unwrap();
+        assert!(profile.contains(&parsed.public_key));
         assert!(!under_root(&root, ADMIN_KEYS).exists());
         let _ = fs::remove_dir_all(&root);
     }

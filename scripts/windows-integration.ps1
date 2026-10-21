@@ -24,11 +24,15 @@ function Show-Setup {
     }
     foreach ($path in @(
             'C:\Users\tunelito',
+            'C:\Users\tunelito\.ssh',
+            'C:\Users\tunelito\.ssh\authorized_keys',
             'C:\ProgramData\ssh\tunelito_authorized_keys',
             'C:\ProgramData\ssh\administrators_authorized_keys'
         )) {
         if (Test-Path -LiteralPath $path) {
             Write-Host "present $path"
+            $owner = (Get-Acl -LiteralPath $path).Owner
+            Write-Host "owner $owner"
             if (-not (Get-Item -LiteralPath $path).PSIsContainer) {
                 Get-Content -LiteralPath $path | ForEach-Object { Write-Host $_ }
             }
@@ -37,6 +41,13 @@ function Show-Setup {
         else {
             Write-Host "absent $path"
         }
+    }
+    $sshd = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    if (Test-Path -LiteralPath $sshd) {
+        Write-Host '--- sshd -T tunelito ---'
+        & $sshd -T -C 'user=tunelito,host=127.0.0.1,addr=127.0.0.1' 2>&1 |
+            Select-String -Pattern 'authorizedkeysfile|pubkeyauthentication|passwordauthentication|authenticationmethods|strictmodes' |
+            ForEach-Object { Write-Host $_.Line }
     }
     $cfg = 'C:\ProgramData\ssh\sshd_config'
     if (Test-Path $cfg) {
@@ -101,13 +112,30 @@ try {
         throw 'OpenSSH client (ssh) is not on PATH'
     }
     Show-Setup
-    $sshOut = & ssh -v -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -i $key -p 22 tunelito@127.0.0.1 echo tunelito-ok 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
+    $sshArgs = @('-v', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=20', '-i', $key, '-p', '22', 'tunelito@127.0.0.1', 'echo', 'tunelito-ok')
+    $sshOut = & ssh @sshArgs 2>&1 | Out-String
+    $sshCode = $LASTEXITCODE
+    if ($sshCode -ne 0) {
         Write-Host $sshOut
         Show-Setup
-        Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 25 -ErrorAction SilentlyContinue |
-            ForEach-Object { Write-Host "$($_.TimeCreated.ToString('o')) $($_.Message)" }
-        throw "localhost ssh failed: $LASTEXITCODE"
+        $cfg = 'C:\ProgramData\ssh\sshd_config'
+        $raw = Get-Content -LiteralPath $cfg -Raw
+        if ($raw -notmatch '(?m)^LogLevel\s') {
+            Set-Content -LiteralPath $cfg -Value ("LogLevel DEBUG3`r`n" + $raw) -Encoding ascii
+            Restart-Service sshd
+            $sshOut = & ssh @sshArgs 2>&1 | Out-String
+            $sshCode = $LASTEXITCODE
+            Write-Host $sshOut
+        }
+        Get-ChildItem 'C:\ProgramData\ssh\logs' -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "--- $($_.FullName) ---"
+            Get-Content -LiteralPath $_.FullName -Tail 80
+        }
+        foreach ($logName in @('OpenSSH/Operational', 'OpenSSH/Admin')) {
+            Get-WinEvent -LogName $logName -MaxEvents 40 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "$logName $($_.TimeCreated.ToString('o')) $($_.Message)" }
+        }
+        if ($sshCode -ne 0) { throw "localhost ssh failed: $sshCode" }
     }
     Write-Host 'verified: OpenSSH capability, tunelito user, sshd, localhost pubkey login'
 

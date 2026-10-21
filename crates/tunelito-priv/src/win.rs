@@ -13,8 +13,8 @@ use tunelito_core::plan::{
 use tunelito_core::sshd::parse_sshd_effective;
 use tunelito_core::windows::{
     acl_commands, register_task_command, strip_tunelito_block, uninstall_commands,
-    write_windows_access_files, WindowsFilePlan, ADMIN_KEYS, PRIV_INSTALL, SSHD_CONFIG, USER_HOME,
-    USER_KEYS,
+    write_windows_access_files, WindowsFilePlan, ADMIN_KEYS, PRIV_INSTALL, PROFILE_KEYS,
+    SSHD_CONFIG, USER_HOME, USER_KEYS,
 };
 use tunelito_core::Error;
 
@@ -60,6 +60,13 @@ pub fn execute(request: &AccessRequest) -> Result<(), Error> {
             if !Path::new(key_path).is_file() {
                 return Err(Error::prepare_failed(format!("missing {key_path}")));
             }
+            if !plan.account_is_admin && !Path::new(tunelito_core::windows::PROFILE_KEYS).is_file()
+            {
+                return Err(Error::prepare_failed(format!(
+                    "missing {}",
+                    tunelito_core::windows::PROFILE_KEYS
+                )));
+            }
         }
         if !plan.account_is_admin && !Path::new(USER_HOME).is_dir() {
             return Err(Error::prepare_failed("missing profile C:\\Users\\tunelito"));
@@ -97,6 +104,7 @@ pub fn uninstall() -> Result<(), Error> {
         }
     }
     let _ = fs::remove_file(USER_KEYS);
+    let _ = fs::remove_file(PROFILE_KEYS);
     let _ = fs::remove_file(ADMIN_KEYS);
     Ok(())
 }

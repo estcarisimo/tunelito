@@ -82,7 +82,7 @@ State lives under the XDG state directory (`~/.local/share/tunelito` on Linux) u
 | `TUNELITO_SSH_DIR` / `TUNELITO_SSH_CONFIG` | Overrides for `tunelito-connect`. |
 | `TUNELITO_EMBED_DIR` | At build time, on Windows, directory with `cloudflared.exe` and `tunelito-priv.exe` to compile into the exe. |
 
-Debian writes `/etc/ssh/sshd_config.d/00-tunelito.conf`: `Match User tunelito`, no password, no X11, no TCP forwarding, `MaxSessions` at least 10. Windows upserts a marked block at the end of `C:\ProgramData\ssh\sshd_config` and does not open port 22. If the account is already an administrator, OpenSSH reads `administrators_authorized_keys` instead. New accounts are not added to that group.
+Debian writes `/etc/ssh/sshd_config.d/00-tunelito.conf`: `Match User tunelito`, no password, no X11, no TCP forwarding, `MaxSessions` at least 10. Windows upserts a marked block in `C:\ProgramData\ssh\sshd_config` ahead of the other Match blocks and does not open port 22. The key is written to `C:\ProgramData\ssh\tunelito_authorized_keys` and to `C:\Users\tunelito\.ssh\authorized_keys`, because stock sshd names the profile file before any Match block. If the account is already an administrator, OpenSSH reads `administrators_authorized_keys` instead. New accounts are not added to that group.
 
 `cloudflared` is pinned to **2026.10.2**. A bad checksum is discarded.
 
