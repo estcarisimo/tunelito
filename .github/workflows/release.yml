@@ -44,7 +44,7 @@ jobs:
       - name: Helper binaries
         run: cargo build --release -p tunelito-connect -p tunelito-priv
       - name: Bundle the host app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Placeholders. Leave the secrets empty to skip signing.
