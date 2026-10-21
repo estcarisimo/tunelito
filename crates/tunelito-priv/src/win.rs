@@ -149,19 +149,16 @@ fn probe_windows() -> Probe {
 }
 
 fn ps_true(script: &str) -> bool {
+    let body = format!("$ErrorActionPreference = 'Stop'; {script}");
     let Ok(output) = Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-WindowStyle",
             "Hidden",
-            "-Command",
-            "Invoke-Expression $env:TUNELITO_PS",
+            "-EncodedCommand",
+            &tunelito_core::plan::encode_powershell_command(&body),
         ])
-        .env(
-            "TUNELITO_PS",
-            format!("$ErrorActionPreference = 'Stop'; {script}"),
-        )
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .output()

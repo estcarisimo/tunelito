@@ -32,12 +32,10 @@ impl CommandStep {
     }
 
     pub fn line(&self) -> String {
-        let mut text = format!("{} {}", self.program, self.args.join(" "));
-        for (_name, value) in &self.env {
-            text.push('\n');
-            text.push_str(value);
+        if let Some((_, script)) = self.env.iter().find(|(key, _)| key == "TUNELITO_PS") {
+            return format!("{} {script}", self.program);
         }
-        text
+        format!("{} {}", self.program, self.args.join(" "))
     }
 
     pub fn is_forbidden_autostart(&self) -> bool {
@@ -378,9 +376,10 @@ fn windows_ps(purpose: &'static str, script: &str) -> CommandStep {
     powershell_step(purpose, script)
 }
 
-/// The script travels in the environment. A quoted `-Command` argument is
-/// reparsed by powershell.exe and can drop the quotes around the script.
+/// `-EncodedCommand` is the script itself. A `-Command` string is reparsed by
+/// powershell.exe, which drops quotes and breaks module autoload.
 pub(crate) fn powershell_step(purpose: &'static str, script: &str) -> CommandStep {
+    let body = format!("$ErrorActionPreference = 'Stop'; {script}");
     let mut step = CommandStep::new(
         OsKind::Windows,
         "powershell.exe",
@@ -389,16 +388,51 @@ pub(crate) fn powershell_step(purpose: &'static str, script: &str) -> CommandSte
             "-NonInteractive",
             "-WindowStyle",
             "Hidden",
-            "-Command",
-            "Invoke-Expression $env:TUNELITO_PS",
+            "-EncodedCommand",
+            &encode_powershell_command(&body),
         ]),
         purpose,
     );
-    step.env.push((
-        "TUNELITO_PS".into(),
-        format!("$ErrorActionPreference = 'Stop'; {script}"),
-    ));
+    step.env.push(("TUNELITO_PS".into(), body));
     step
+}
+
+pub(crate) fn encode_powershell_command(script: &str) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    let mut out = String::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let b0 = bytes[index];
+        let b1 = if index + 1 < bytes.len() {
+            bytes[index + 1]
+        } else {
+            0
+        };
+        let b2 = if index + 2 < bytes.len() {
+            bytes[index + 2]
+        } else {
+            0
+        };
+        let triple = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(TABLE[((triple >> 18) & 63) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 63) as usize] as char);
+        if index + 1 < bytes.len() {
+            out.push(TABLE[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if index + 2 < bytes.len() {
+            out.push(TABLE[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        index += 3;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -486,11 +520,26 @@ mod tests {
             .iter()
             .find(|step| step.purpose == "create_dedicated_user")
             .unwrap();
+        assert!(create.args.iter().any(|arg| arg == "-EncodedCommand"));
         assert!(create.args.iter().all(|arg| !arg.contains('"')));
         assert!(create
             .env
             .iter()
             .any(|(key, value)| key == "TUNELITO_PS" && value.contains("New-LocalUser")));
+        let encoded = create
+            .args
+            .iter()
+            .position(|arg| arg == "-EncodedCommand")
+            .and_then(|index| create.args.get(index + 1))
+            .unwrap();
+        let script = create
+            .env
+            .iter()
+            .find(|(key, _)| key == "TUNELITO_PS")
+            .unwrap()
+            .1
+            .as_str();
+        assert_eq!(encoded, &encode_powershell_command(script));
         assert!(blob.contains("Remove-NetFirewallRule"));
         assert!(!blob.to_lowercase().contains("administrators"));
         assert!(!blob.to_lowercase().contains("automatic"));

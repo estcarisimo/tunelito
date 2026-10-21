@@ -75,11 +75,26 @@ try {
     $requestPath = Join-Path $work 'request.json'
     $resultPath = Join-Path $work 'result.json'
     [System.IO.File]::WriteAllText($requestPath, $request)
-    & $priv apply --request $requestPath --root C:\ --execute --windows --result $resultPath
-    $exit = $LASTEXITCODE
+    # tunelito-priv is a windowed executable. The call operator does not wait
+    # for those, so a later check can run before setup has written anything.
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo.FileName = $priv
+    $proc.StartInfo.Arguments = "apply --request `"$requestPath`" --root C:\ --execute --windows --result `"$resultPath`""
+    $proc.StartInfo.UseShellExecute = $false
+    $proc.StartInfo.RedirectStandardOutput = $true
+    $proc.StartInfo.RedirectStandardError = $true
+    $proc.StartInfo.CreateNoWindow = $true
+    [void]$proc.Start()
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+    $privOut = $outTask.Result
+    $privErr = $errTask.Result
+    if ($privOut) { Write-Host $privOut }
+    if ($privErr) { Write-Host $privErr }
     $resultText = if (Test-Path $resultPath) { Get-Content $resultPath -Raw } else { '' }
-    Write-Host "priv exit=$exit result=$resultText"
-    if (-not $resultText) { throw "tunelito-priv produced no result (exit $exit)" }
+    Write-Host "priv exit=$($proc.ExitCode) result=$resultText"
+    if (-not $resultText) { throw "tunelito-priv produced no result (exit $($proc.ExitCode))" }
     $parsed = $resultText | ConvertFrom-Json
     if (-not $parsed.ok) { throw "tunelito-priv failed: $($parsed.detail)" }
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {

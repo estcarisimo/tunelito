@@ -226,12 +226,12 @@ fn run_step(step: &tunelito_core::plan::CommandStep) -> Result<(), Error> {
     if detail.is_empty() {
         detail = stdout.trim().to_string();
     }
-    if detail.len() > 300 {
-        let mut start = detail.len() - 300;
-        while !detail.is_char_boundary(start) {
-            start += 1;
+    if detail.len() > 350 {
+        let mut end = 350;
+        while !detail.is_char_boundary(end) {
+            end -= 1;
         }
-        detail = detail[start..].to_string();
+        detail.truncate(end);
     }
     Err(Error::prepare_failed(format!("{}: {detail}", step.purpose)))
 }
