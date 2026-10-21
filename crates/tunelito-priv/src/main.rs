@@ -1,13 +1,19 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use clap::Parser;
 use tunelito_core::access::{write_linux_access_files, AccessRequest};
 use tunelito_core::plan::{
     activate_commands, disable_commands, install_commands, reload_command, Probe,
 };
+use tunelito_core::windows::{write_windows_access_files, WindowsFilePlan};
 use tunelito_core::Error;
+
+#[cfg(windows)]
+mod win;
 
 /// Apply a validated access request. `--execute` is refused unless `--root /` and euid is 0.
 #[derive(Debug, Parser)]
@@ -24,9 +30,23 @@ enum Cmd {
         request: PathBuf,
         #[arg(long, default_value = "/")]
         root: PathBuf,
-        /// Run system commands. Refused when root is not `/` or the process is not root.
+        /// Run system commands. Refused when root is not the real system root or the process is not privileged.
         #[arg(long)]
         execute: bool,
+        /// Write the Windows OpenSSH layout. On Windows, `--execute` runs it.
+        #[arg(long)]
+        windows: bool,
+        /// JSON `{"ok":true|false,"detail":"..."}` for the app that launched us without a console.
+        #[arg(long)]
+        result: Option<PathBuf>,
+    },
+    /// Remove the dedicated user, the scheduled task, and the managed sshd block.
+    /// Does not remove the OpenSSH capability.
+    Uninstall {
+        #[arg(long)]
+        execute: bool,
+        #[arg(long)]
+        result: Option<PathBuf>,
     },
 }
 
@@ -44,18 +64,53 @@ fn run() -> Result<(), Error> {
             request,
             root,
             execute,
-        } => apply(&request, &root, execute),
+            windows,
+            result,
+        } => {
+            let outcome = apply(&request, &root, execute, windows);
+            write_result(result.as_deref(), &outcome);
+            outcome
+        }
+        Cmd::Uninstall { execute, result } => {
+            let outcome = uninstall(execute);
+            write_result(result.as_deref(), &outcome);
+            outcome
+        }
     }
+}
+
+fn write_result(path: Option<&Path>, outcome: &Result<(), Error>) {
+    let Some(path) = path else {
+        return;
+    };
+    let (ok, detail) = match outcome {
+        Ok(()) => (true, String::new()),
+        Err(err) => (false, err.to_string()),
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let body = serde_json::json!({ "ok": ok, "detail": detail });
+    let _ = fs::write(path, body.to_string());
 }
 
 fn apply(
     request_path: &std::path::Path,
     root: &std::path::Path,
     execute: bool,
+    windows: bool,
 ) -> Result<(), Error> {
+    // The request may sit in a directory a less trusted account can write.
+    // Refuse a link there instead of reading whatever it points at.
+    if fs::symlink_metadata(request_path)?.file_type().is_symlink() {
+        return Err(Error::prepare_failed("refusing a linked request file"));
+    }
     let text = fs::read_to_string(request_path)?;
     let request: AccessRequest = serde_json::from_str(&text)
         .map_err(|err| Error::with_detail("prepare_failed", err.to_string()))?;
+    if windows {
+        return apply_windows(&request, root, execute);
+    }
     if execute {
         if root != std::path::Path::new("/") {
             return Err(Error::prepare_failed(
@@ -108,21 +163,92 @@ fn apply(
     Ok(())
 }
 
+fn apply_windows(request: &AccessRequest, root: &Path, execute: bool) -> Result<(), Error> {
+    if execute {
+        #[cfg(windows)]
+        {
+            let _ = root;
+            return win::execute(request);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (request, root);
+            return Err(Error::prepare_failed(
+                "refusing to run Windows commands on this operating system",
+            ));
+        }
+    }
+    let plan = WindowsFilePlan {
+        set_global_max_sessions: request.windows_set_global_max_sessions,
+        add_sftp: request.windows_add_sftp,
+        account_is_admin: request.windows_account_is_admin,
+        authorized_key_lines: request.authorized_key_lines.clone(),
+        write_keys: request.write_keys,
+    };
+    let written = write_windows_access_files(root, &plan)?;
+    for path in &written {
+        println!("{}", path.display());
+    }
+    Ok(())
+}
+
+fn uninstall(execute: bool) -> Result<(), Error> {
+    if !execute {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        return win::uninstall();
+    }
+    #[cfg(not(windows))]
+    {
+        Err(Error::prepare_failed(
+            "refusing to run Windows uninstall on this operating system",
+        ))
+    }
+}
+
 fn run_step(step: &tunelito_core::plan::CommandStep) -> Result<(), Error> {
-    let status = Command::new(&step.program)
+    let mut command = Command::new(&step.program);
+    command
         .args(&step.args)
         .envs(step.env.iter().cloned())
-        .status()
-        .map_err(|err| Error::prepare_failed(err.to_string()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::prepare_failed(format!(
-            "{} {} failed",
-            step.program,
-            step.args.join(" ")
-        )))
+        .stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
     }
+    let output = command
+        .output()
+        .map_err(|err| Error::prepare_failed(format!("{}: {err}", step.purpose)))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = strip_powershell_noise(&String::from_utf8_lossy(&output.stderr));
+    let stdout = strip_powershell_noise(&String::from_utf8_lossy(&output.stdout));
+    let mut detail = if !stdout.is_empty() { stdout } else { stderr };
+    if detail.len() > 350 {
+        let mut end = 350;
+        while !detail.is_char_boundary(end) {
+            end -= 1;
+        }
+        detail.truncate(end);
+    }
+    Err(Error::prepare_failed(format!("{}: {detail}", step.purpose)))
+}
+
+fn strip_powershell_noise(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("#< CLIXML")
+                && !line.starts_with("<Objs")
+                && !line.contains("Preparing modules for first use")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn systemctl_is_active(unit: &str) -> bool {

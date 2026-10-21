@@ -1,0 +1,789 @@
+//! Windows OpenSSH file layout and the command text the privileged helper runs.
+//!
+//! The Linux job unit-tests this module. It does not install a Windows capability.
+//! `tunelito-priv --windows` writes the same layout under a fake root.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::cloudflared::OsKind;
+use crate::error::Error;
+use crate::keys::{parse_public_keys, DEDICATED_USER};
+use crate::plan::{CommandStep, Probe};
+use crate::sshd::{dropin_decisions, upsert_authorized_keys};
+
+pub const MARKER_BEGIN: &str = "# BEGIN tunelito";
+pub const MARKER_END: &str = "# END tunelito";
+
+pub const SSHD_CONFIG: &str = r"C:\ProgramData\ssh\sshd_config";
+pub const ADMIN_KEYS: &str = r"C:\ProgramData\ssh\administrators_authorized_keys";
+pub const USER_HOME: &str = r"C:\Users\tunelito";
+/// Beside the service, so an administrator Match cannot point sshd elsewhere.
+/// sshd reads this file while impersonating the user, so that user must be able to read it.
+pub const USER_KEYS: &str = r"C:\ProgramData\ssh\tunelito_authorized_keys";
+pub const USER_SSH_DIR: &str = r"C:\Users\tunelito\.ssh";
+/// Stock `sshd_config` sets `AuthorizedKeysFile .ssh/authorized_keys` before any
+/// Match block. OpenSSH keeps that path unless a Match replaces it, so the same
+/// key has to live here too.
+pub const PROFILE_KEYS: &str = r"C:\Users\tunelito\.ssh\authorized_keys";
+pub const HELLO_DIR: &str = r"C:\ProgramData\tunelito\hellos";
+/// SYSTEM and Administrators change this tree. Users may only read it.
+pub const STATE_DIR: &str = r"C:\ProgramData\tunelito";
+/// The SYSTEM task runs this file, so nobody but SYSTEM and Administrators may write it.
+pub const PRIV_DIR: &str = r"C:\ProgramData\tunelito\bin";
+pub const PRIV_INSTALL: &str = r"C:\ProgramData\tunelito\bin\tunelito-priv.exe";
+/// Only the account that ran setup may write here. The SYSTEM task reads it.
+pub const REQUEST_DIR: &str = r"C:\ProgramData\tunelito\requests";
+pub const REQUEST_FILE: &str = r"C:\ProgramData\tunelito\requests\request.json";
+/// The SYSTEM task writes here. The setup account may only read, so it cannot
+/// plant a link that turns the result write into a write somewhere else.
+pub const RESULT_DIR: &str = r"C:\ProgramData\tunelito\results";
+pub const RESULT_FILE: &str = r"C:\ProgramData\tunelito\results\result.json";
+pub const TASK_NAME: &str = "TunelitoPriv";
+
+const SYSTEM_SID: &str = "S-1-5-18";
+const ADMINS_SID: &str = "S-1-5-32-544";
+const USERS_SID: &str = "S-1-5-32-545";
+
+/// The account that ran setup, as sent by the unelevated window. Only a local,
+/// domain, Microsoft, or Entra user SID is accepted, never a well-known group.
+pub fn validate_owner_sid(sid: &str) -> Result<(), Error> {
+    let rest = sid
+        .strip_prefix("S-1-5-21-")
+        .or_else(|| sid.strip_prefix("S-1-12-1-"));
+    let ok = rest.is_some_and(|rest| {
+        let parts: Vec<&str> = rest.split('-').collect();
+        parts.len() >= 4
+            && parts.len() <= 8
+            && parts.iter().all(|part| {
+                !part.is_empty() && part.len() <= 10 && part.bytes().all(|b| b.is_ascii_digit())
+            })
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::prepare_failed("refusing that owner account"))
+    }
+}
+
+/// Administrators share one key file. Everyone else uses the ProgramData file,
+/// with the same lines copied to the profile path stock sshd already names.
+pub fn authorized_keys_path(account_is_admin: bool) -> &'static str {
+    if account_is_admin {
+        ADMIN_KEYS
+    } else {
+        USER_KEYS
+    }
+}
+
+pub fn under_root(root: &Path, absolute: &str) -> PathBuf {
+    let trimmed = absolute
+        .trim_start_matches(r"C:\")
+        .trim_start_matches("C:/");
+    let mut path = root.to_path_buf();
+    for part in trimmed.split(['\\', '/']) {
+        if !part.is_empty() {
+            path.push(part);
+        }
+    }
+    path
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsFilePlan {
+    pub set_global_max_sessions: bool,
+    pub add_sftp: bool,
+    pub account_is_admin: bool,
+    pub authorized_key_lines: Vec<String>,
+    pub write_keys: bool,
+}
+
+impl WindowsFilePlan {
+    pub fn from_probe(probe: &Probe, key_lines: Vec<String>, write_keys: bool) -> Self {
+        let (set_global, add_sftp) = dropin_decisions(&probe.effective(), probe.openssh_installed);
+        Self {
+            set_global_max_sessions: set_global,
+            add_sftp,
+            account_is_admin: probe.windows_user_is_admin,
+            authorized_key_lines: key_lines,
+            write_keys,
+        }
+    }
+}
+
+/// Rewrite `sshd_config`. Foreign lines stay. `MaxSessions` is raised before the
+/// first `Match` (OpenSSH keeps the first value). The `tunelito` Match comes
+/// before any other Match so its `AuthorizedKeysFile` wins for that user.
+pub fn rewrite_sshd_config(
+    existing: &str,
+    set_global_max_sessions: bool,
+    add_sftp: bool,
+) -> Result<String, Error> {
+    let stripped = strip_marked_block(existing, MARKER_BEGIN, MARKER_END);
+    let mut lines: Vec<String> = stripped.lines().map(|line| line.to_string()).collect();
+    let first_match = lines
+        .iter()
+        .position(|line| is_match_line(line))
+        .unwrap_or(lines.len());
+    if set_global_max_sessions {
+        if let Some(index) = lines[..first_match]
+            .iter()
+            .position(|line| is_global_key(line, "maxsessions"))
+        {
+            lines[index] = "MaxSessions 10".into();
+        } else {
+            lines.insert(first_match, "MaxSessions 10".into());
+        }
+    }
+    let first_match = lines
+        .iter()
+        .position(|line| is_match_line(line))
+        .unwrap_or(lines.len());
+    if add_sftp
+        && !lines[..first_match]
+            .iter()
+            .any(|line| is_global_key(line, "subsystem"))
+    {
+        lines.insert(first_match, "Subsystem sftp sftp-server.exe".into());
+    }
+    let first_match = lines
+        .iter()
+        .position(|line| is_match_line(line))
+        .unwrap_or(lines.len());
+    let block_lines: Vec<String> = match_block().lines().map(|line| line.to_string()).collect();
+    for (offset, line) in block_lines.into_iter().enumerate() {
+        lines.insert(first_match + offset, line);
+    }
+    let mut body = lines.join("\n");
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    validate_match_block(&match_block())?;
+    if body.to_ascii_lowercase().contains("new-netfirewallrule") {
+        return Err(Error::unsafe_sshd_dropin());
+    }
+    Ok(body)
+}
+
+pub fn strip_tunelito_block(existing: &str) -> String {
+    let mut text = strip_marked_block(existing, MARKER_BEGIN, MARKER_END);
+    while text.contains("\n\n\n") {
+        text = text.replace("\n\n\n", "\n\n");
+    }
+    text
+}
+
+fn match_block() -> String {
+    format!(
+        "{MARKER_BEGIN}\n\
+         # Managed by tunelito. Safe to delete; the app recreates it.\n\
+         Match User {DEDICATED_USER}\n    \
+         AuthorizedKeysFile __PROGRAMDATA__/ssh/tunelito_authorized_keys .ssh/authorized_keys\n    \
+         PasswordAuthentication no\n    \
+         KbdInteractiveAuthentication no\n    \
+         PubkeyAuthentication yes\n    \
+         AuthenticationMethods publickey\n    \
+         MaxSessions 10\n    \
+         X11Forwarding no\n    \
+         AllowTcpForwarding no\n    \
+         ClientAliveInterval 30\n    \
+         ClientAliveCountMax 4\n\
+         {MARKER_END}\n"
+    )
+}
+
+fn validate_match_block(text: &str) -> Result<(), Error> {
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.contains('|') || line.contains(';') || line.contains('`') || line.contains('$') {
+            return Err(Error::unsafe_sshd_dropin());
+        }
+        if line.eq_ignore_ascii_case(&format!("Match User {DEDICATED_USER}")) {
+            continue;
+        }
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let key = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("").trim();
+        let allowed = [
+            "AuthorizedKeysFile",
+            "PasswordAuthentication",
+            "KbdInteractiveAuthentication",
+            "PubkeyAuthentication",
+            "AuthenticationMethods",
+            "MaxSessions",
+            "X11Forwarding",
+            "AllowTcpForwarding",
+            "ClientAliveInterval",
+            "ClientAliveCountMax",
+        ];
+        if !allowed.contains(&key) || value.is_empty() {
+            return Err(Error::unsafe_sshd_dropin());
+        }
+    }
+    Ok(())
+}
+
+fn is_match_line(line: &str) -> bool {
+    line.trim().to_ascii_lowercase().starts_with("match ")
+}
+
+fn is_global_key(line: &str, key: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return false;
+    }
+    trimmed
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case(key))
+}
+
+fn strip_marked_block(existing: &str, begin: &str, end: &str) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in existing.lines() {
+        if line.trim() == begin {
+            skipping = true;
+            continue;
+        }
+        if skipping {
+            if line.trim() == end {
+                skipping = false;
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+pub fn write_windows_access_files(
+    root: &Path,
+    plan: &WindowsFilePlan,
+) -> Result<Vec<PathBuf>, Error> {
+    for line in &plan.authorized_key_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed = parse_public_keys(line)?;
+        if parsed.len() != 1 {
+            return Err(Error::invalid_public_key());
+        }
+    }
+    let config_path = under_root(root, SSHD_CONFIG);
+    let existing = fs::read_to_string(&config_path).unwrap_or_default();
+    let rewritten = rewrite_sshd_config(&existing, plan.set_global_max_sessions, plan.add_sftp)?;
+    write_text(&config_path, &rewritten)?;
+    let mut written = vec![config_path];
+    if plan.write_keys {
+        let path = under_root(root, authorized_keys_path(plan.account_is_admin));
+        let existing_keys = fs::read_to_string(&path).unwrap_or_default();
+        let body = upsert_authorized_keys(&existing_keys, &plan.authorized_key_lines);
+        write_text(&path, &body)?;
+        written.push(path);
+        if !plan.account_is_admin {
+            let profile = under_root(root, PROFILE_KEYS);
+            let existing_profile = fs::read_to_string(&profile).unwrap_or_default();
+            let profile_body =
+                upsert_authorized_keys(&existing_profile, &plan.authorized_key_lines);
+            write_text(&profile, &profile_body)?;
+            written.push(profile);
+        }
+    }
+    let hellos = under_root(root, HELLO_DIR);
+    fs::create_dir_all(&hellos)?;
+    written.push(hellos);
+    Ok(written)
+}
+
+fn write_text(path: &Path, contents: &str) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
+    let mut steps = Vec::new();
+    if account_is_admin {
+        steps.push(ps(
+            "acl_authorized_keys",
+            &acl_script(
+                ADMIN_KEYS,
+                &[("S-1-5-18", "FullControl"), ("S-1-5-32-544", "FullControl")],
+                true,
+            ),
+        ));
+    } else {
+        // Replace the whole DACL. icacls /grant leaves the app-package entry
+        // Windows puts on a new profile, and sshd then ignores the key.
+        // sshd opens the key file while impersonating tunelito, so that account
+        // needs Read on every file the Match block names.
+        let profile = [
+            ("S-1-5-18", "FullControl"),
+            ("S-1-5-32-544", "FullControl"),
+            ("tunelito", "FullControl"),
+        ];
+        steps.push(ps("acl_profile", &acl_script(USER_HOME, &profile, false)));
+        steps.push(ps(
+            "acl_ssh_dir",
+            &acl_script(USER_SSH_DIR, &profile, false),
+        ));
+        steps.push(ps(
+            "acl_profile_keys",
+            &acl_script(PROFILE_KEYS, &profile, true),
+        ));
+        steps.push(ps(
+            "acl_authorized_keys",
+            &acl_script(
+                USER_KEYS,
+                &[
+                    ("S-1-5-18", "FullControl"),
+                    ("S-1-5-32-544", "FullControl"),
+                    ("tunelito", "Read"),
+                ],
+                true,
+            ),
+        ));
+    }
+    steps
+}
+
+/// ACLs for `C:\ProgramData\tunelito`. Each directory gets a fresh, protected
+/// DACL, so an older install that let Users write here is repaired.
+/// `owner_sid` is the account allowed to drop requests for the SYSTEM task.
+/// UNTESTED ON CI: the command text is checked here, not executed.
+pub fn state_acl_commands(owner_sid: Option<&str>) -> Result<Vec<CommandStep>, Error> {
+    let locked = [
+        (SYSTEM_SID, "FullControl"),
+        (ADMINS_SID, "FullControl"),
+        (USERS_SID, "ReadAndExecute"),
+    ];
+    let mut steps = vec![
+        ps("acl_state_dir", &acl_script(STATE_DIR, &locked, true)),
+        ps("acl_priv_dir", &acl_script(PRIV_DIR, &locked, true)),
+        // The owner keeps WRITE_DAC, so the owner is reset to SYSTEM as well.
+        ps("acl_priv_exe", &acl_script(PRIV_INSTALL, &locked, true)),
+        ps(
+            "acl_hello_dir",
+            &acl_script(
+                HELLO_DIR,
+                &[
+                    (SYSTEM_SID, "FullControl"),
+                    (ADMINS_SID, "FullControl"),
+                    (USERS_SID, "ReadAndExecute"),
+                    ("tunelito", "Modify"),
+                ],
+                true,
+            ),
+        ),
+    ];
+    let mut request = vec![(SYSTEM_SID, "FullControl"), (ADMINS_SID, "FullControl")];
+    let mut result = request.clone();
+    if let Some(sid) = owner_sid {
+        validate_owner_sid(sid)?;
+        request.push((sid, "Modify"));
+        result.push((sid, "ReadAndExecute"));
+    }
+    steps.push(ps(
+        "acl_request_dir",
+        &acl_script(REQUEST_DIR, &request, true),
+    ));
+    steps.push(ps("acl_result_dir", &acl_script(RESULT_DIR, &result, true)));
+    Ok(steps)
+}
+
+/// Let the owner start the SYSTEM task without a UAC prompt. Nobody else gets
+/// read or run rights beyond the task's defaults.
+/// UNTESTED ON CI: the command text is checked here, not executed.
+pub fn task_access_command(owner_sid: &str) -> Result<CommandStep, Error> {
+    validate_owner_sid(owner_sid)?;
+    Ok(ps(
+        "grant_task_run",
+        &format!(
+            "$svc = New-Object -ComObject Schedule.Service; $svc.Connect(); \
+             $task = $svc.GetFolder('\\').GetTask('{TASK_NAME}'); \
+             $sddl = $task.GetSecurityDescriptor(4); \
+             $ace = '(A;;GRGX;;;{owner_sid})'; \
+             if (-not $sddl.Contains($ace)) {{ $task.SetSecurityDescriptor($sddl + $ace, 0) }}"
+        ),
+    ))
+}
+
+/// `grants` are `(sid or account, FileSystemRights)`. A fresh DACL drops every
+/// other entry, including app-package access inherited from the profile.
+fn acl_script(path: &str, grants: &[(&str, &str)], set_owner: bool) -> String {
+    let path = path.replace('\'', "");
+    let mut script = format!(
+        "$path = '{path}'; \
+         if (-not (Test-Path -LiteralPath $path)) {{ throw \"missing $path\" }}; \
+         $item = Get-Item -LiteralPath $path -Force; \
+         $acl = if ($item.PSIsContainer) {{ New-Object System.Security.AccessControl.DirectorySecurity }} else {{ New-Object System.Security.AccessControl.FileSecurity }}; \
+         $acl.SetAccessRuleProtection($true, $false); \
+         $inherit = if ($item.PSIsContainer) {{ [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' }} else {{ [System.Security.AccessControl.InheritanceFlags]::None }}; \
+         $prop = [System.Security.AccessControl.PropagationFlags]::None; \
+         $allow = [System.Security.AccessControl.AccessControlType]::Allow;"
+    );
+    if grants
+        .iter()
+        .any(|(identity, _)| !identity.starts_with("S-1-"))
+    {
+        script.push_str(
+            " $userAccount = Get-CimInstance -ClassName Win32_UserAccount -Filter \"Name='tunelito' and LocalAccount=True\"; \
+             if (-not $userAccount) { throw 'tunelito has no account' }; \
+             $userSid = New-Object System.Security.Principal.SecurityIdentifier ([string]$userAccount.SID);",
+        );
+    }
+    for (identity, rights) in grants {
+        let identity = identity.replace('\'', "");
+        let rights = rights.replace('\'', "");
+        let identity_expr = if identity.starts_with("S-1-") {
+            format!("New-Object System.Security.Principal.SecurityIdentifier '{identity}'")
+        } else if identity == "tunelito" {
+            "$userSid".to_string()
+        } else {
+            format!("New-Object System.Security.Principal.NTAccount '{identity}'")
+        };
+        script.push_str(&format!(
+            " $id = {identity_expr}; \
+             $rights = [System.Security.AccessControl.FileSystemRights]'{rights}'; \
+             $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($id, $rights, $inherit, $prop, $allow); \
+             $acl.AddAccessRule($rule);"
+        ));
+    }
+    script.push_str(" $item.SetAccessControl($acl);");
+    if set_owner {
+        // sshd accepts the key only when the owner is SYSTEM, Administrators, or the account.
+        script.push_str(
+            " $icacls = Join-Path $env:SystemRoot 'System32\\icacls.exe'; \
+             & $icacls $path /setowner *S-1-5-18; \
+             if ($LASTEXITCODE -ne 0) { throw \"icacls owner failed on $path\" };",
+        );
+    }
+    script
+}
+
+/// Create the Windows profile before any file is written under `C:\Users\tunelito`.
+/// A plain directory there makes Windows put the real profile somewhere else,
+/// and sshd then ignores the key file.
+pub fn create_profile_command() -> CommandStep {
+    ps(
+        "create_user_profile",
+        r#"$account = Get-CimInstance -ClassName Win32_UserAccount -Filter "Name='tunelito' and LocalAccount=True"; if (-not $account) { throw 'tunelito has no account' }; $sid = [string]$account.SID; if ([string]::IsNullOrWhiteSpace($sid)) { throw 'tunelito has no SID' }; $reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"; $dest = 'C:\Users\tunelito'; if ((Test-Path -LiteralPath $dest) -and -not (Test-Path -LiteralPath $reg)) { Remove-Item -LiteralPath $dest -Recurse -Force }; if (-not (Test-Path -LiteralPath $reg)) { if (-not ('Tunelito.NativeProfile' -as [type])) { Add-Type -Namespace Tunelito -Name NativeProfile -MemberDefinition '[DllImport("userenv.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern int CreateProfile(string pszUserSid, string pszUserName, System.Text.StringBuilder pszProfilePath, uint cchProfilePath);' }; $buf = New-Object System.Text.StringBuilder 260; $code = [Tunelito.NativeProfile]::CreateProfile($sid, 'tunelito', $buf, [uint32]260); if ($code -ne 0 -and $code -ne -2147024713) { throw "CreateProfile failed: $code path=$($buf.ToString())" } }; $image = (Get-ItemProperty -LiteralPath $reg -Name ProfileImagePath).ProfileImagePath; if ($image -ne $dest) { throw "profile path is [$image]" }; if (-not (Test-Path -LiteralPath $dest)) { throw 'profile directory missing' }"#,
+    )
+}
+
+pub fn register_task_command(priv_exe: &str) -> Result<CommandStep, Error> {
+    if priv_exe.trim().is_empty()
+        || priv_exe
+            .chars()
+            .any(|c| c == '"' || c == '\n' || c == '\r' || c == '&' || c == '|')
+    {
+        return Err(Error::prepare_failed(
+            "refusing to register that helper path",
+        ));
+    }
+    let run = format!(
+        "\"{priv_exe}\" apply --request \"{REQUEST_FILE}\" --root C:\\ --execute --result \"{RESULT_FILE}\" --windows"
+    );
+    Ok(CommandStep::new(
+        OsKind::Windows,
+        "schtasks",
+        vec![
+            "/Create".into(),
+            "/F".into(),
+            "/TN".into(),
+            TASK_NAME.into(),
+            "/SC".into(),
+            "ONCE".into(),
+            "/ST".into(),
+            "00:00".into(),
+            "/SD".into(),
+            "01/01/2099".into(),
+            "/RL".into(),
+            "HIGHEST".into(),
+            "/RU".into(),
+            "SYSTEM".into(),
+            "/TR".into(),
+            run,
+        ],
+        "register_priv_task",
+    ))
+}
+
+pub fn run_task_command() -> CommandStep {
+    CommandStep::new(
+        OsKind::Windows,
+        "schtasks",
+        vec!["/Run".into(), "/TN".into(), TASK_NAME.into()],
+        "run_priv_task",
+    )
+}
+
+pub fn uninstall_commands() -> Vec<CommandStep> {
+    vec![
+        CommandStep::new(
+            OsKind::Windows,
+            "schtasks",
+            vec![
+                "/Delete".into(),
+                "/F".into(),
+                "/TN".into(),
+                TASK_NAME.into(),
+            ],
+            "delete_priv_task",
+        ),
+        ps(
+            "remove_dedicated_user",
+            "Remove-LocalUser -Name 'tunelito' -ErrorAction SilentlyContinue",
+        ),
+    ]
+}
+
+pub fn close_firewall_command() -> CommandStep {
+    ps(
+        "close_public_ssh",
+        "try { Remove-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue; Get-NetFirewallRule -DisplayName 'OpenSSH SSH Server*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue } catch {}",
+    )
+}
+
+fn ps(purpose: &'static str, script: &str) -> CommandStep {
+    crate::plan::powershell_step(purpose, script)
+}
+
+pub fn commands_open_firewall(steps: &[CommandStep]) -> bool {
+    steps.iter().any(|step| {
+        let line = step.line().to_ascii_lowercase();
+        line.contains("new-netfirewallrule") || line.contains("advfirewall") && line.contains("add")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STOCK: &str = "\
+Port 22\n\
+MaxSessions 4\n\
+Subsystem sftp sftp-server.exe\n\
+\n\
+Match Group administrators\n\
+    AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys\n";
+
+    #[test]
+    fn raises_maxsessions_before_match_and_puts_tunelito_first() {
+        let once = rewrite_sshd_config(STOCK, true, false).unwrap();
+        let twice = rewrite_sshd_config(&once, true, false).unwrap();
+        assert_eq!(once, twice);
+        assert!(once.contains("Port 22\n"));
+        assert!(once.contains("MaxSessions 10\n"));
+        assert!(!once.contains("MaxSessions 4"));
+        assert!(once.contains("Match Group administrators\n"));
+        let tunelito = once.find("Match User tunelito").unwrap();
+        let admins = once.find("Match Group administrators").unwrap();
+        assert!(tunelito < admins);
+        assert!(once.contains("# END tunelito"));
+        assert!(!once.to_ascii_lowercase().contains("forcecommand"));
+        assert!(!once.to_ascii_lowercase().contains("new-netfirewallrule"));
+    }
+
+    #[test]
+    fn adds_windows_sftp_only_when_missing() {
+        let bare = "Port 22\n";
+        let with = rewrite_sshd_config(bare, false, true).unwrap();
+        assert!(with.contains("Subsystem sftp sftp-server.exe\n"));
+        let again = rewrite_sshd_config(&with, false, true).unwrap();
+        assert_eq!(again.matches("Subsystem sftp").count(), 1);
+        assert!(!again.contains("internal-sftp"));
+    }
+
+    #[test]
+    fn admin_account_uses_the_administrators_key_file() {
+        assert_eq!(authorized_keys_path(false), USER_KEYS);
+        assert_eq!(authorized_keys_path(true), ADMIN_KEYS);
+        let user = acl_commands(false);
+        let admin = acl_commands(true);
+        let user_blob = user.iter().map(|s| s.line()).collect::<Vec<_>>().join("\n");
+        let admin_blob = admin
+            .iter()
+            .map(|s| s.line())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(user_blob.contains(USER_KEYS));
+        assert!(user_blob.contains(PROFILE_KEYS));
+        assert!(user_blob.contains(USER_SSH_DIR));
+        assert!(user_blob.contains("S-1-5-18"));
+        assert!(user_blob.contains("tunelito"));
+        assert!(user_blob.contains("Read"));
+        // Users get nothing on the key files. The state tree is separate.
+        assert!(!user_blob.contains("S-1-5-32-545"));
+        assert!(user_blob.contains("S-1-5-32-544"));
+        assert!(!user_blob.contains(ADMIN_KEYS));
+        assert!(admin_blob.contains(ADMIN_KEYS));
+        assert!(admin_blob.contains("S-1-5-32-544"));
+        assert!(!admin_blob.contains(USER_KEYS));
+        assert!(!user_blob.to_ascii_lowercase().contains("everyone"));
+        assert!(!admin_blob.to_ascii_lowercase().contains("everyone"));
+        assert!(!commands_open_firewall(&user));
+        assert!(!commands_open_firewall(&admin));
+    }
+
+    const OWNER: &str = "S-1-5-21-1004336348-1177238915-682003330-1001";
+
+    fn step_for(steps: &[CommandStep], purpose: &str) -> String {
+        steps
+            .iter()
+            .find(|step| step.purpose == purpose)
+            .map(|step| step.line())
+            .unwrap_or_else(|| panic!("no step {purpose}"))
+    }
+
+    #[test]
+    fn users_cannot_write_what_the_system_task_runs_or_reads() {
+        let steps = state_acl_commands(Some(OWNER)).unwrap();
+        for purpose in ["acl_state_dir", "acl_priv_dir", "acl_priv_exe"] {
+            let line = step_for(&steps, purpose);
+            assert!(line.contains("'S-1-5-32-545'; $rights = [System.Security.AccessControl.FileSystemRights]'ReadAndExecute'"), "{purpose}");
+            assert!(!line.contains("'S-1-5-32-545'; $rights = [System.Security.AccessControl.FileSystemRights]'FullControl'"), "{purpose}");
+            assert!(!line.contains("Modify"), "{purpose}");
+            assert!(!line.contains(OWNER), "{purpose}");
+            assert!(
+                line.contains("SetAccessRuleProtection($true, $false)"),
+                "{purpose}"
+            );
+            assert!(line.contains("/setowner *S-1-5-18"), "{purpose}");
+        }
+        assert!(step_for(&steps, "acl_priv_exe").contains(PRIV_INSTALL));
+        let request = step_for(&steps, "acl_request_dir");
+        assert!(request.contains(REQUEST_DIR));
+        assert!(request.contains(&format!(
+            "'{OWNER}'; $rights = [System.Security.AccessControl.FileSystemRights]'Modify'"
+        )));
+        assert!(!request.contains("S-1-5-32-545"));
+        let result = step_for(&steps, "acl_result_dir");
+        assert!(result.contains(RESULT_DIR));
+        assert!(result.contains(&format!(
+            "'{OWNER}'; $rights = [System.Security.AccessControl.FileSystemRights]'ReadAndExecute'"
+        )));
+        assert!(!result.contains("Modify"));
+        assert!(!result.contains("S-1-5-32-545"));
+        let hello = step_for(&steps, "acl_hello_dir");
+        assert!(hello.contains("$userSid"));
+        let blob = steps
+            .iter()
+            .map(|s| s.line())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!blob.to_ascii_lowercase().contains("everyone"));
+        assert!(!commands_open_firewall(&steps));
+        assert!(REQUEST_FILE.starts_with(REQUEST_DIR));
+        assert!(RESULT_FILE.starts_with(RESULT_DIR));
+        assert!(PRIV_INSTALL.starts_with(PRIV_DIR));
+    }
+
+    #[test]
+    fn without_an_owner_only_system_and_admins_touch_requests() {
+        let steps = state_acl_commands(None).unwrap();
+        for purpose in ["acl_request_dir", "acl_result_dir"] {
+            let line = step_for(&steps, purpose);
+            assert!(!line.contains("S-1-5-21-"), "{purpose}");
+            assert!(!line.contains("S-1-5-32-545"), "{purpose}");
+        }
+    }
+
+    #[test]
+    fn owner_sid_must_be_a_user_account() {
+        assert!(validate_owner_sid(OWNER).is_ok());
+        assert!(validate_owner_sid("S-1-12-1-3570634265-1102236330-2717461162-4135454934").is_ok());
+        for bad in [
+            "",
+            "S-1-5-18",
+            "S-1-5-32-544",
+            "S-1-5-32-545",
+            "S-1-1-0",
+            "S-1-5-11",
+            "S-1-5-21-1-2",
+            "S-1-5-21-1-2-3-x",
+            "S-1-5-21-1-2-3-4'; calc",
+            "S-1-5-21-1-2-3-4)(A;;GA;;;WD",
+        ] {
+            assert!(validate_owner_sid(bad).is_err(), "{bad}");
+            assert!(state_acl_commands(Some(bad)).is_err(), "{bad}");
+            assert!(task_access_command(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_the_owner_gets_run_rights_on_the_task() {
+        let line = task_access_command(OWNER).unwrap().line();
+        assert!(line.contains(TASK_NAME));
+        assert!(line.contains(&format!("(A;;GRGX;;;{OWNER})")));
+        assert!(!line.contains(";;;WD)"));
+        assert!(!line.contains(";;;BU)"));
+        assert!(!line.contains(";;;AU)"));
+        assert!(!line.contains("GA;;;"));
+    }
+
+    #[test]
+    fn task_is_on_demand_and_uninstall_keeps_the_capability() {
+        let task = register_task_command(PRIV_INSTALL).unwrap();
+        let line = task.line().to_ascii_lowercase();
+        assert!(line.contains("once"));
+        assert!(!line.contains("onstart"));
+        assert!(!line.contains("onlogon"));
+        assert!(!task.is_forbidden_autostart());
+        assert!(register_task_command("C:\\evil\" & calc.exe").is_err());
+        let uninstall = uninstall_commands();
+        let blob = uninstall
+            .iter()
+            .map(|s| s.line())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_ascii_lowercase();
+        assert!(blob.contains("remove-localuser"));
+        assert!(!blob.contains("remove-windowscapability"));
+        assert!(!blob.contains("add-localgroupmember"));
+        assert!(!commands_open_firewall(&uninstall));
+    }
+
+    #[test]
+    fn fake_root_preserves_a_foreign_key_and_the_stock_config() {
+        let root = std::env::temp_dir().join(format!("tunelito-win-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let config = under_root(&root, SSHD_CONFIG);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, STOCK).unwrap();
+        let key_path = under_root(&root, USER_KEYS);
+        fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        fs::write(&key_path, "ssh-ed25519 AAAAforeign kept\n").unwrap();
+        let dir = root.join("key");
+        fs::create_dir_all(&dir).unwrap();
+        let (parsed, _) = crate::keys::ensure_keypair(&dir.join("k"), "helper").unwrap();
+        let plan = WindowsFilePlan {
+            set_global_max_sessions: true,
+            add_sftp: false,
+            account_is_admin: false,
+            authorized_key_lines: vec![parsed.public_key.clone()],
+            write_keys: true,
+        };
+        write_windows_access_files(&root, &plan).unwrap();
+        let config_text = fs::read_to_string(&config).unwrap();
+        assert!(config_text.contains("Match Group administrators"));
+        assert!(config_text.contains("Match User tunelito"));
+        assert!(config_text.contains(
+            "AuthorizedKeysFile __PROGRAMDATA__/ssh/tunelito_authorized_keys .ssh/authorized_keys"
+        ));
+        let keys = fs::read_to_string(under_root(&root, USER_KEYS)).unwrap();
+        assert!(keys.contains("AAAAforeign"));
+        assert!(keys.contains(&parsed.public_key));
+        let profile = fs::read_to_string(under_root(&root, PROFILE_KEYS)).unwrap();
+        assert!(profile.contains(&parsed.public_key));
+        assert!(!under_root(&root, ADMIN_KEYS).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+}

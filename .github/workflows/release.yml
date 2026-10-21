@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            bundles: deb
+            bundles: deb,appimage
           - os: windows-latest
             bundles: msi,nsis
           - os: macos-latest
@@ -37,12 +37,19 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libssl-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libssl-dev file
+          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64
       - name: Frontend dependencies
         working-directory: app
         run: npm ci
       - name: Helper binaries
         run: cargo build --release -p tunelito-connect -p tunelito-priv
+      - name: Embed cloudflared into the Windows exe
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/stage-embed.ps1
+        env:
+          TUNELITO_EMBED_DIR: ${{ github.workspace }}/embed
       - name: Bundle the host app
         uses: tauri-apps/tauri-action@v1
         env:
@@ -58,18 +65,53 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CODESIGN_ACCOUNT: ${{ secrets.AZURE_CODESIGN_ACCOUNT }}
+          AZURE_CODESIGN_PROFILE: ${{ secrets.AZURE_CODESIGN_PROFILE }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG: ${{ secrets.SIGNPATH_ORG }}
+          SIGNPATH_PROJECT: ${{ secrets.SIGNPATH_PROJECT }}
+          SIGNPATH_POLICY: ${{ secrets.SIGNPATH_POLICY }}
+          TUNELITO_EMBED_DIR: ${{ github.workspace }}/embed
         with:
           projectPath: app
           tagName: ${{ github.ref_name }}
           releaseName: Tunelito ${{ github.ref_name }}
           releaseBody: |
-            Draft installer build for ${{ github.ref_name }}.
-            Windows and macOS service control inside the app is not executed in CI.
-            Code-signing secrets are optional. Empty secrets produce unsigned installers.
-            `tunelito-connect` and `tunelito-priv` are attached as extra artifacts and are not yet inside the installer.
+            Draft build for ${{ github.ref_name }}.
+            The Windows file to download is the portable `tunelito.exe`. The installer is optional.
+            Signing secrets are optional. Empty secrets leave the files unsigned. See docs/SIGNING.md.
           releaseDraft: true
           prerelease: false
           args: --bundles ${{ matrix.bundles }}
+      - name: Attach the stable download names
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          copy_first() {
+            local pattern="$1" dest="$2"
+            local file
+            file="$(find target/release -type f -name "$pattern" | head -n 1)"
+            if [ -z "$file" ]; then
+              echo "missing $pattern"
+              exit 1
+            fi
+            cp "$file" "$dest"
+            gh release upload "$tag" "$dest" --clobber
+          }
+          case "${{ matrix.os }}" in
+            windows-latest) copy_first 'tunelito.exe' tunelito.exe ;;
+            ubuntu-24.04)
+              copy_first '*.deb' tunelito.deb
+              copy_first '*.AppImage' tunelito.AppImage
+              ;;
+            macos-latest) copy_first '*.dmg' tunelito.dmg ;;
+          esac
       - name: Upload helper binaries
         uses: actions/upload-artifact@v7
         with:

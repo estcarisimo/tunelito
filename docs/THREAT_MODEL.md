@@ -57,3 +57,11 @@ A trusted helper is trusted. For the time the switch is on they can change files
 The hello directory on Linux is mode `1777` so the desktop user can read hellos without being in the `tunelito` group (group membership would need a new login). The files are world-readable. They contain only what the client chose to send.
 
 The administrator prompt (`pkexec` or `sudo` on Linux) is required to create the account and to start sshd. A person who approves a prompt they do not understand is the same risk as any other privileged installer.
+
+On Windows the first UAC prompt registers an on-demand scheduled task, `TunelitoPriv`, that runs the helper as SYSTEM. It has no boot or logon trigger. Later switches drop a request for that task instead of asking again, so the layout under `C:\ProgramData\tunelito` is part of the privilege boundary:
+
+- `bin\tunelito-priv.exe`, the file the task runs, and the directory itself are owned by SYSTEM. Only SYSTEM and Administrators can write them. Users can read and run them.
+- `requests\` can be written only by the account that approved setup. A process running as that account can therefore turn access on or off. That is no more than the person at the window can do.
+- `results\` is written by SYSTEM. The setup account can only read it, so it cannot plant a link that would send the task's write somewhere else.
+- Only the setup account gets run rights on the task.
+- Every elevated run resets these permissions, so an older build that left them writable is repaired on the next switch.

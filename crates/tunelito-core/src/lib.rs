@@ -1,10 +1,9 @@
 //! Shared Tunelito logic: keys, the on/off state machine, sshd plans, and the helper hello.
 //!
 //! Operating-system service control (installing OpenSSH, creating the dedicated user,
-//! starting cloudflared) is planned here and executed by the host app. Windows and macOS
-//! command execution is not run in CI. Linux CI executes the file layout, parsers, state
-//! machine, and helper CLI, and checks Linux command arguments without applying them to
-//! the machine.
+//! starting cloudflared) is planned here and executed by the host app. The Linux job
+//! checks command text and file layout. The Windows job runs the setup on `windows-latest`.
+//! macOS command execution is not run in CI.
 
 #![forbid(unsafe_code)]
 
@@ -24,6 +23,7 @@ pub mod sessions;
 pub mod ssh_config;
 pub mod sshd;
 pub mod state;
+pub mod windows;
 
 pub use error::Error;
 pub use host::{Effect, Host, Settings, ViewModel};
