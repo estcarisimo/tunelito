@@ -5,13 +5,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use clap::Parser;
-use tunelito_core::access::{write_linux_access_files, AccessRequest};
+use tunelito_core::access::{write_linux_access_files, write_macos_access_files, AccessRequest};
+use tunelito_core::linux::{only_tunelito_dropin, ONLY_TUNELITO_DROPIN};
+#[cfg(unix)]
+use tunelito_core::linux::{render_polkit_rule, POLKIT_RULE, PRIV_PATH};
 use tunelito_core::plan::{
     activate_commands, disable_commands, install_commands, reload_command, Probe,
 };
+use tunelito_core::sshd::includes_dropins;
 use tunelito_core::windows::{write_windows_access_files, WindowsFilePlan};
 use tunelito_core::Error;
 
+#[cfg(unix)]
+mod mac;
 #[cfg(windows)]
 mod win;
 
@@ -36,6 +42,9 @@ enum Cmd {
         /// Write the Windows OpenSSH layout. On Windows, `--execute` runs it.
         #[arg(long)]
         windows: bool,
+        /// Write the macOS layout. On macOS this is the default, and `--execute` runs it.
+        #[arg(long)]
+        macos: bool,
         /// JSON `{"ok":true|false,"detail":"..."}` for the app that launched us without a console.
         #[arg(long)]
         result: Option<PathBuf>,
@@ -65,9 +74,11 @@ fn run() -> Result<(), Error> {
             root,
             execute,
             windows,
+            macos,
             result,
         } => {
-            let outcome = apply(&request, &root, execute, windows);
+            let macos = macos || cfg!(target_os = "macos");
+            let outcome = apply(&request, &root, execute, windows, macos);
             write_result(result.as_deref(), &outcome);
             outcome
         }
@@ -99,11 +110,21 @@ fn apply(
     root: &std::path::Path,
     execute: bool,
     windows: bool,
+    macos: bool,
 ) -> Result<(), Error> {
     // The request may sit in a directory a less trusted account can write.
     // Refuse a link there instead of reading whatever it points at.
     if fs::symlink_metadata(request_path)?.file_type().is_symlink() {
         return Err(Error::prepare_failed("refusing a linked request file"));
+    }
+    // Started through pkexec, only the real system and only `--execute`. A
+    // polkit rule may let the desktop user do this without a password, so
+    // files-only mode must not become a way to create directories as root
+    // anywhere else. pkexec always sets PKEXEC_UID; the caller cannot clear it.
+    if std::env::var_os("PKEXEC_UID").is_some() && (!execute || root != Path::new("/")) {
+        return Err(Error::prepare_failed(
+            "through pkexec, tunelito-priv only runs --execute against /",
+        ));
     }
     let text = fs::read_to_string(request_path)?;
     let request: AccessRequest = serde_json::from_str(&text)
@@ -111,6 +132,10 @@ fn apply(
     if windows {
         return apply_windows(&request, root, execute);
     }
+    if macos {
+        return apply_macos(&request, root, execute);
+    }
+    let mut sshd_was_active = true;
     if execute {
         if root != std::path::Path::new("/") {
             return Err(Error::prepare_failed(
@@ -120,10 +145,22 @@ fn apply(
         if !is_root() {
             return Err(Error::needs_admin());
         }
+        // Before any install: Debian's package starts sshd as it installs.
+        sshd_was_active = probe_linux().sshd_active;
         if request.prepare {
             let probe = probe_linux();
             for step in install_commands(&probe)? {
                 run_step(&step)?;
+            }
+        }
+        if request.dropin.is_some() {
+            let config = fs::read_to_string("/etc/ssh/sshd_config")
+                .or_else(|_| fs::read_to_string("/usr/etc/ssh/sshd_config"))
+                .unwrap_or_default();
+            if !includes_dropins(&config) {
+                return Err(Error::prepare_failed(
+                    "sshd_config does not include /etc/ssh/sshd_config.d, so the tunelito settings would be ignored",
+                ));
             }
         }
     }
@@ -143,11 +180,29 @@ fn apply(
         {
             let _ = Command::new("chown").arg("root:root").arg(dropin).status();
         }
+        // SELinux (Fedora): files root creates under the home get the wrong
+        // label, and sshd then refuses the key.
+        if Path::new("/usr/sbin/restorecon").exists() {
+            let _ = Command::new("/usr/sbin/restorecon")
+                .args(["-R", "/home/tunelito/.ssh"])
+                .status();
+        }
+        #[cfg(unix)]
+        if request.prepare {
+            write_polkit_rule();
+        }
         let probe = probe_linux();
         if request.reload_sshd {
             run_step(&reload_command(&probe)?)?;
         }
         if request.start_sshd {
+            if !sshd_was_active {
+                fs::write(ONLY_TUNELITO_DROPIN, only_tunelito_dropin())?;
+                // Debian's install may have started sshd already; make it read the file.
+                if probe.sshd_active {
+                    run_step(&reload_command(&probe)?)?;
+                }
+            }
             let mut starting = probe.clone();
             starting.sshd_active = false;
             for step in activate_commands(&starting)? {
@@ -155,10 +210,71 @@ fn apply(
             }
         }
         if request.stop_sshd {
+            // The app asks for this only when Tunelito started sshd.
             for step in disable_commands(&probe, true, true)? {
                 run_step(&step)?;
             }
+            let _ = fs::remove_file(ONLY_TUNELITO_DROPIN);
         }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+/// After a setup the person approved through pkexec, let that same person
+/// switch again without a password. Only for the packaged helper path the
+/// polkit action names; a failure here leaves the password prompt in place.
+fn write_polkit_rule() {
+    let Ok(uid) = std::env::var("PKEXEC_UID") else {
+        return;
+    };
+    if std::env::current_exe().ok().as_deref() != Some(Path::new(PRIV_PATH)) {
+        return;
+    }
+    let rules_dir = Path::new(POLKIT_RULE).parent().unwrap_or(Path::new("/"));
+    if !rules_dir.is_dir() || uid.is_empty() || !uid.bytes().all(|b| b.is_ascii_digit()) {
+        return;
+    }
+    let Some(login) = Command::new("id")
+        .args(["-nu", &uid])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|text| text.trim().to_string())
+    else {
+        return;
+    };
+    let Ok(rule) = render_polkit_rule(&login) else {
+        return;
+    };
+    if fs::write(POLKIT_RULE, rule).is_ok() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(POLKIT_RULE, fs::Permissions::from_mode(0o644));
+    }
+}
+
+fn apply_macos(request: &AccessRequest, root: &Path, execute: bool) -> Result<(), Error> {
+    if execute {
+        if root != Path::new("/") {
+            return Err(Error::prepare_failed(
+                "refusing to run system commands against a fake root",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            return mac::execute(request);
+        }
+        #[cfg(not(unix))]
+        {
+            return Err(Error::prepare_failed(
+                "refusing to run macOS commands on this operating system",
+            ));
+        }
+    }
+    let written = write_macos_access_files(root, request)?;
+    for path in &written {
+        println!("{}", path.display());
     }
     Ok(())
 }
@@ -273,10 +389,18 @@ fn is_root() -> bool {
 fn probe_linux() -> Probe {
     let mut probe = Probe::linux_fresh();
     probe.groups_present.clear();
+    probe.linux_packages = tunelito_core::linux::Packages::detect(|program| {
+        Command::new("sh")
+            .args(["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", program])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    });
+    probe.ssh_unit = probe.linux_packages.ssh_unit().into();
     probe.openssh_installed = Command::new("sh")
         .args([
             "-c",
-            "command -v sshd >/dev/null || dpkg -s openssh-server >/dev/null 2>&1",
+            "command -v sshd >/dev/null || test -x /usr/sbin/sshd || dpkg -s openssh-server >/dev/null 2>&1",
         ])
         .status()
         .map(|s| s.success())

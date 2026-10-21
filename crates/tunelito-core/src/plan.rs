@@ -68,6 +68,14 @@ pub struct Probe {
     /// True when the dedicated account is already in Administrators.
     /// OpenSSH then ignores `~\.ssh\authorized_keys`.
     pub windows_user_is_admin: bool,
+    /// `com.apple.access_ssh` exists ("Only these users" in Remote Login).
+    pub macos_access_group: bool,
+    /// Tunelito turned Remote Login on and must turn it off again.
+    pub macos_remote_login_ours: bool,
+    /// Tunelito created `com.apple.access_ssh` and must delete it again.
+    pub macos_access_group_ours: bool,
+    /// Which package manager installs OpenSSH on this Linux system.
+    pub linux_packages: crate::linux::Packages,
 }
 
 impl Probe {
@@ -87,6 +95,10 @@ impl Probe {
             windows_capability_installed: false,
             windows_startup_automatic: false,
             windows_user_is_admin: false,
+            macos_access_group: false,
+            macos_remote_login_ours: false,
+            macos_access_group_ours: false,
+            linux_packages: crate::linux::Packages::Apt,
         }
     }
 
@@ -118,9 +130,9 @@ pub fn managed_paths(os: OsKind) -> ManagedPaths {
         // UNTESTED ON CI: path layout is the documented Apple default, not checked on a Mac.
         OsKind::Macos => ManagedPaths {
             authorized_keys: "/Users/tunelito/.ssh/authorized_keys".into(),
-            dropin: "/etc/ssh/sshd_config".into(),
-            hello_dir: "/Library/Application Support/tunelito/hellos".into(),
-            user_home: "/Users/tunelito".into(),
+            dropin: crate::macos::DROPIN.into(),
+            hello_dir: crate::macos::HELLO_DIR.into(),
+            user_home: crate::macos::USER_HOME.into(),
         },
         // UNTESTED ON CI: Windows OpenSSH optional-capability paths.
         OsKind::Windows => ManagedPaths {
@@ -138,17 +150,9 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
     match probe.os {
         OsKind::Linux => {
             if !probe.openssh_installed {
-                let mut install = CommandStep::new(
-                    OsKind::Linux,
-                    "apt-get",
-                    strs(&["install", "-y", "openssh-server"]),
-                    "install_openssh",
-                );
-                install
-                    .env
-                    .push(("DEBIAN_FRONTEND".into(), "noninteractive".into()));
-                steps.push(install);
-                // The Debian package enables ssh at boot. Undo that; Tunelito starts it on demand.
+                steps.push(probe.linux_packages.install_openssh()?);
+                // Debian's package enables ssh at boot. Undo that on every distro;
+                // Tunelito starts it on demand.
                 steps.push(CommandStep::new(
                     OsKind::Linux,
                     "systemctl",
@@ -184,33 +188,7 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
         }
         OsKind::Macos => {
             // UNTESTED ON CI: macOS execution.
-            if !probe.remote_login_on {
-                let mut persistent = CommandStep::new(
-                    OsKind::Macos,
-                    "systemsetup",
-                    strs(&["-setremotelogin", "on"]),
-                    "enable_remote_login",
-                );
-                persistent.boot_persistent = true;
-                steps.push(persistent);
-            }
-            if !probe.user_exists {
-                steps.push(CommandStep::new(
-                    OsKind::Macos,
-                    "sysadminctl",
-                    strs(&[
-                        "-addUser",
-                        DEDICATED_USER,
-                        "-fullName",
-                        "Tunelito",
-                        "-shell",
-                        "/bin/zsh",
-                        "-password",
-                        "-",
-                    ]),
-                    "create_dedicated_user",
-                ));
-            }
+            steps.extend(crate::macos::install_commands(probe));
         }
         OsKind::Windows => {
             // UNTESTED ON CI: Windows execution.
@@ -258,12 +236,7 @@ pub fn activate_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
             }
         }
         OsKind::Macos => {
-            steps.push(CommandStep::new(
-                OsKind::Macos,
-                "launchctl",
-                strs(&["kickstart", "-k", "system/com.openssh.sshd"]),
-                "start_sshd",
-            ));
+            steps.extend(crate::macos::enable_commands(probe));
         }
         OsKind::Windows => {
             steps.push(windows_ps("start_sshd", "Start-Service sshd"));
@@ -281,12 +254,7 @@ pub fn reload_command(probe: &Probe) -> Result<CommandStep, Error> {
             vec!["reload".into(), probe.ssh_unit.clone()],
             "reload_sshd",
         ),
-        OsKind::Macos => CommandStep::new(
-            OsKind::Macos,
-            "launchctl",
-            strs(&["kickstart", "-k", "system/com.openssh.sshd"]),
-            "reload_sshd",
-        ),
+        OsKind::Macos => crate::macos::reload_command(),
         OsKind::Windows => windows_ps("reload_sshd", "Restart-Service sshd"),
     })
 }
@@ -306,27 +274,11 @@ pub fn disable_commands(
                 vec!["stop".into(), probe.ssh_unit.clone()],
                 "stop_sshd",
             )),
-            OsKind::Macos => steps.push(CommandStep::new(
-                OsKind::Macos,
-                "launchctl",
-                strs(&["kill", "SIGTERM", "system/com.openssh.sshd"]),
-                "stop_sshd",
-            )),
+            OsKind::Macos => steps.extend(crate::macos::disable_commands(probe)),
             OsKind::Windows => {
                 steps.push(windows_ps("stop_sshd", "Stop-Service sshd"));
             }
         }
-    }
-    // If we were the ones who turned Remote Login on, turn it back off.
-    if probe.os == OsKind::Macos && started_by_us && !probe.remote_login_on {
-        let mut step = CommandStep::new(
-            OsKind::Macos,
-            "systemsetup",
-            strs(&["-setremotelogin", "off"]),
-            "disable_remote_login",
-        );
-        step.boot_persistent = true;
-        steps.push(step);
     }
     Ok(steps)
 }
@@ -355,10 +307,10 @@ pub fn coverage_note(os: OsKind) -> &'static str {
             "Linux command arguments are unit-tested. CI does not install packages, create users, or start sshd."
         }
         OsKind::Macos => {
-            "UNTESTED ON CI: macOS Remote Login, sysadminctl, and launchctl are not executed here."
+            "UNTESTED ON CI: macOS Remote Login, sysadminctl, dseditgroup, and launchctl are not executed here."
         }
         OsKind::Windows => {
-            "Windows OpenSSH setup is executed on windows-latest. The Linux job only checks this command text."
+            "UNTESTED ON CI: windows-latest builds the exe but does not run Windows OpenSSH setup. The Linux job checks this command text."
         }
     }
 }
@@ -554,15 +506,22 @@ mod tests {
     fn macos_remote_login_is_undone_when_we_enabled_it() {
         let mut probe = Probe::linux_fresh();
         probe.os = OsKind::Macos;
+        probe.ssh_unit = "sshd".into();
         probe.remote_login_on = false;
-        let enable = install_commands(&probe).unwrap();
+        let enable = activate_commands(&probe).unwrap();
         assert!(enable
             .iter()
             .any(|s| s.boot_persistent && s.purpose == "enable_remote_login"));
         assert_no_autostart(&enable);
+        probe.remote_login_on = true;
+        probe.macos_remote_login_ours = true;
         let disable = disable_commands(&probe, true, true).unwrap();
         assert!(disable.iter().any(|s| s.purpose == "disable_remote_login"));
-        assert!(disable.iter().any(|s| s.purpose == "stop_sshd"));
+        probe.macos_remote_login_ours = false;
+        let untouched = disable_commands(&probe, true, true).unwrap();
+        assert!(untouched
+            .iter()
+            .all(|s| s.purpose != "disable_remote_login"));
         assert!(coverage_note(OsKind::Macos).contains("UNTESTED ON CI"));
     }
 

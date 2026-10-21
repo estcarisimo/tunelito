@@ -37,11 +37,19 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["openssh-client"]
+        "depends": ["openssh-client", "pkexec | policykit-1"],
+        "files": {
+          "/usr/lib/tunelito/tunelito-priv": "../../target/release/tunelito-priv",
+          "/usr/share/polkit-1/actions/io.github.estcarisimo.tunelito.policy": "linux/io.github.estcarisimo.tunelito.policy"
+        },
+        "postRemoveScript": "linux/postrm.sh"
       }
     },
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "13.0",
+      "files": {
+        "MacOS/tunelito-priv": "../../target/release/tunelito-priv"
+      }
     },
     "windows": {
       "nsis": {

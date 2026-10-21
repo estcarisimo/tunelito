@@ -2,8 +2,8 @@
 //!
 //! Operating-system service control (installing OpenSSH, creating the dedicated user,
 //! starting cloudflared) is planned here and executed by the host app. The Linux job
-//! checks command text and file layout. The Windows job runs the setup on `windows-latest`.
-//! macOS command execution is not run in CI.
+//! checks command text and file layout. The Windows job builds the exe and does not run
+//! setup. macOS command execution is not run in CI.
 
 #![forbid(unsafe_code)]
 
@@ -14,8 +14,10 @@ pub mod error;
 pub mod hello;
 pub mod host;
 pub mod keys;
+pub mod linux;
 pub mod locales;
 pub mod logs;
+pub mod macos;
 pub mod netinfo;
 pub mod paths;
 pub mod plan;
