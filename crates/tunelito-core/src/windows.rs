@@ -136,6 +136,7 @@ fn match_block() -> String {
         "{MARKER_BEGIN}\n\
          # Managed by tunelito. Safe to delete; the app recreates it.\n\
          Match User {DEDICATED_USER}\n    \
+         AuthorizedKeysFile C:/Users/tunelito/.ssh/authorized_keys\n    \
          PasswordAuthentication no\n    \
          KbdInteractiveAuthentication no\n    \
          PubkeyAuthentication yes\n    \
@@ -165,6 +166,7 @@ fn validate_match_block(text: &str) -> Result<(), Error> {
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("").trim();
         let allowed = [
+            "AuthorizedKeysFile",
             "PasswordAuthentication",
             "KbdInteractiveAuthentication",
             "PubkeyAuthentication",
@@ -261,55 +263,39 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
     if account_is_admin {
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(ADMIN_KEYS, true, false),
+            &acl_script(ADMIN_KEYS, "*S-1-5-32-544:(F)"),
         ));
     } else {
-        steps.push(ps("acl_profile", &acl_script(USER_HOME, false, true)));
-        steps.push(ps("acl_ssh_dir", &acl_script(USER_SSH_DIR, false, true)));
+        steps.push(ps(
+            "acl_profile",
+            &acl_script(USER_HOME, "tunelito:(OI)(CI)F"),
+        ));
+        steps.push(ps(
+            "acl_ssh_dir",
+            &acl_script(USER_SSH_DIR, "tunelito:(OI)(CI)F"),
+        ));
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(USER_KEYS, false, false),
+            &acl_script(USER_KEYS, "tunelito:(R)"),
         ));
     }
     steps.push(ps(
         "acl_request_dir",
-        &acl_script(STATE_DIR, false, true).replace("'tunelito'", "([System.Security.Principal.SecurityIdentifier]'S-1-5-32-545').Translate([type][System.Security.Principal.NTAccount]).Value"),
+        &acl_script(STATE_DIR, "*S-1-5-32-545:(OI)(CI)F"),
     ));
     steps
 }
 
-fn acl_script(path: &str, administrators: bool, directory: bool) -> String {
-    let principal = if administrators {
-        "([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([type][System.Security.Principal.NTAccount]).Value"
-    } else {
-        "'tunelito'"
-    };
-    let rights = if administrators || directory {
-        "FullControl"
-    } else {
-        "Read"
-    };
+fn acl_script(path: &str, extra_grant: &str) -> String {
     format!(
         "$path = '{path}'; \
-         if (-not (Test-Path -LiteralPath $path)) {{ exit 0 }}; \
-         $acl = Get-Acl -LiteralPath $path; \
-         $acl.SetAccessRuleProtection($true, $false); \
-         foreach ($rule in @($acl.Access)) {{ [void]$acl.RemoveAccessRule($rule) }}; \
-         $full = [System.Security.AccessControl.FileSystemRights]::FullControl; \
-         $right = [System.Security.AccessControl.FileSystemRights]::{rights}; \
-         $allow = [System.Security.AccessControl.AccessControlType]::Allow; \
-         $system = ([System.Security.Principal.SecurityIdentifier]'S-1-5-18').Translate([type][System.Security.Principal.NTAccount]).Value; \
-         $who = {principal}; \
-         $inherit = [System.Security.AccessControl.InheritanceFlags]::None; \
-         $prop = [System.Security.AccessControl.PropagationFlags]::None; \
-         if ({dir}) {{ $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit }}; \
-         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, $full, $inherit, $prop, $allow))); \
-         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, $right, $inherit, $prop, $allow))); \
-         Set-Acl -LiteralPath $path -AclObject $acl",
+         if (-not (Test-Path -LiteralPath $path)) {{ throw \"missing $path\" }}; \
+         $icacls = Join-Path $env:SystemRoot 'System32\\icacls.exe'; \
+         & $icacls $path /inheritance:r | Out-Null; \
+         & $icacls $path /grant:r '*S-1-5-18:(OI)(CI)F' '{extra_grant}' | Out-Null; \
+         if ($LASTEXITCODE -ne 0) {{ throw 'icacls failed' }}",
         path = path.replace('\'', ""),
-        rights = rights,
-        principal = principal,
-        dir = if directory { "$true" } else { "$false" },
+        extra_grant = extra_grant,
     )
 }
 

@@ -51,11 +51,28 @@ try {
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
         throw 'OpenSSH client (ssh) is not on PATH'
     }
+    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\ssh\logs' | Out-Null
+    $cfgPath = 'C:\ProgramData\ssh\sshd_config'
+    $cfg = Get-Content $cfgPath -Raw
+    if ($cfg -notmatch '(?m)^LogLevel ') {
+        $cfg = $cfg -replace '(?m)^Match ', "LogLevel DEBUG3`r`n`r`nMatch "
+        Set-Content -Path $cfgPath -Value $cfg -Encoding ascii
+        Restart-Service sshd
+    }
+    Write-Host '--- profile, key file, permissions ---'
+    Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' | ForEach-Object {
+        $image = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
+        if ($image -like '*tunelito*') { Write-Host "profile $image" }
+    }
+    Get-Content 'C:\Users\tunelito\.ssh\authorized_keys' -ErrorAction Continue | ForEach-Object { Write-Host $_ }
+    icacls 'C:\Users\tunelito'
+    icacls 'C:\Users\tunelito\.ssh'
+    icacls 'C:\Users\tunelito\.ssh\authorized_keys'
     $sshOut = & ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -i $key -p 22 tunelito@127.0.0.1 echo tunelito-ok 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
         Write-Host $sshOut
         $sshdLog = 'C:\ProgramData\ssh\logs\sshd.log'
-        if (Test-Path $sshdLog) { Get-Content $sshdLog -Tail 40 | ForEach-Object { Write-Host $_ } }
+        if (Test-Path $sshdLog) { Get-Content $sshdLog -Tail 60 | ForEach-Object { Write-Host $_ } }
         throw "localhost ssh failed: $LASTEXITCODE"
     }
     Write-Host 'verified: OpenSSH capability, tunelito user, sshd, localhost pubkey login'
