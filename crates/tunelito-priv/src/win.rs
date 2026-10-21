@@ -128,14 +128,15 @@ fn probe_windows() -> Probe {
     probe.openssh_installed =
         ps_true("[bool](Get-Service -Name sshd -ErrorAction SilentlyContinue)");
     probe.windows_capability_installed = probe.openssh_installed;
-    probe.user_exists =
-        ps_true("[bool](Get-LocalUser -Name 'tunelito' -ErrorAction SilentlyContinue)");
+    probe.user_exists = ps_true(
+        "try { $u = [ADSI]'WinNT://./tunelito,user'; [void]$u.Name; 'True' } catch { 'False' }",
+    );
     probe.sshd_active =
         ps_true("(Get-Service -Name sshd -ErrorAction SilentlyContinue).Status -eq 'Running'");
     probe.windows_startup_automatic =
         ps_true("(Get-Service -Name sshd -ErrorAction SilentlyContinue).StartType -eq 'Automatic'");
     probe.windows_user_is_admin = ps_true(
-        "$u = Get-LocalUser -Name 'tunelito' -ErrorAction SilentlyContinue; if (-not $u) { 'False'; exit 0 }; $g = Get-LocalGroup -SID 'S-1-5-32-544'; $hit = @(Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Where-Object { $_.SID -eq $u.SID }); [bool]($hit.Count -gt 0)",
+        "try { $name = ((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([System.Security.Principal.NTAccount]).Value -split '\\\\')[-1]; $group = [ADSI]('WinNT://./' + $name + ',group'); $hit = @($group.Invoke('Members') | ForEach-Object { $_.GetType().InvokeMember('Name','GetProperty',$null,$_,$null) } | Where-Object { $_ -eq 'tunelito' }); [bool]($hit.Count -gt 0) } catch { 'False' }",
     );
     if let Ok(config) = fs::read_to_string(SSHD_CONFIG) {
         let parsed = parse_sshd_effective(&config);

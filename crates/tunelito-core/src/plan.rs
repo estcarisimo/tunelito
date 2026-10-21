@@ -235,7 +235,7 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
                 // A blank password is refused for network logon, including public-key SSH.
                 steps.push(windows_ps(
                     "create_dedicated_user",
-                    "$bytes = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $sec = ConvertTo-SecureString ([Convert]::ToBase64String($bytes)) -AsPlainText -Force; New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -Password $sec -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires | Out-Null; Enable-LocalUser -Name 'tunelito'; if (-not (Get-LocalUser -Name 'tunelito').Enabled) { throw 'tunelito account is disabled' }",
+                    "$alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'.ToCharArray(); $bytes = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $plain = -join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] }); $net = Join-Path $env:SystemRoot 'System32\\net.exe'; & $net user tunelito $plain /add /y; if ($LASTEXITCODE -ne 0) { throw \"net user /add failed ($LASTEXITCODE)\" }; & $net user tunelito /active:yes; if ($LASTEXITCODE -ne 0) { throw \"net user /active failed ($LASTEXITCODE)\" }; $user = [ADSI]'WinNT://./tunelito,user'; $flags = [int]$user.Get('UserFlags'); $user.Put('UserFlags', ($flags -bor 65536)); $user.SetInfo()",
                 ));
             }
             steps.push(crate::windows::create_profile_command());
@@ -379,7 +379,9 @@ fn windows_ps(purpose: &'static str, script: &str) -> CommandStep {
 /// `-EncodedCommand` is the script itself. A `-Command` string is reparsed by
 /// powershell.exe, which drops quotes and breaks module autoload.
 pub(crate) fn powershell_step(purpose: &'static str, script: &str) -> CommandStep {
-    let body = format!("$ErrorActionPreference = 'Stop'; {script}");
+    let body = format!(
+        "$ProgressPreference = 'SilentlyContinue'; $ErrorActionPreference = 'Stop'; try {{ {script} }} catch {{ [Console]::Out.WriteLine($_.Exception.Message); exit 1 }}"
+    );
     let mut step = CommandStep::new(
         OsKind::Windows,
         "powershell.exe",
@@ -512,7 +514,8 @@ mod tests {
             .join("\n");
         assert!(blob.contains("OpenSSH.Server~~~~0.0.1.0"));
         assert!(blob.contains("StartupType Manual"));
-        assert!(blob.contains("New-LocalUser"));
+        assert!(blob.contains("net.exe"));
+        assert!(blob.contains("65536"));
         assert!(blob.contains("CreateProfile"));
         assert!(blob.contains("ProfileImagePath"));
         assert!(!blob.contains("-NoPassword"));
@@ -525,7 +528,7 @@ mod tests {
         assert!(create
             .env
             .iter()
-            .any(|(key, value)| key == "TUNELITO_PS" && value.contains("New-LocalUser")));
+            .any(|(key, value)| key == "TUNELITO_PS" && value.contains("net.exe")));
         let encoded = create
             .args
             .iter()

@@ -220,12 +220,9 @@ fn run_step(step: &tunelito_core::plan::CommandStep) -> Result<(), Error> {
     if output.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut detail = stderr.trim().to_string();
-    if detail.is_empty() {
-        detail = stdout.trim().to_string();
-    }
+    let stderr = strip_powershell_noise(&String::from_utf8_lossy(&output.stderr));
+    let stdout = strip_powershell_noise(&String::from_utf8_lossy(&output.stdout));
+    let mut detail = if !stdout.is_empty() { stdout } else { stderr };
     if detail.len() > 350 {
         let mut end = 350;
         while !detail.is_char_boundary(end) {
@@ -234,6 +231,19 @@ fn run_step(step: &tunelito_core::plan::CommandStep) -> Result<(), Error> {
         detail.truncate(end);
     }
     Err(Error::prepare_failed(format!("{}: {detail}", step.purpose)))
+}
+
+fn strip_powershell_noise(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("#< CLIXML")
+                && !line.starts_with("<Objs")
+                && !line.contains("Preparing modules for first use")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn systemctl_is_active(unit: &str) -> bool {
