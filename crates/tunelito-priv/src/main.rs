@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use clap::Parser;
 use tunelito_core::access::{write_linux_access_files, AccessRequest};
@@ -205,24 +205,35 @@ fn uninstall(execute: bool) -> Result<(), Error> {
 
 fn run_step(step: &tunelito_core::plan::CommandStep) -> Result<(), Error> {
     let mut command = Command::new(&step.program);
-    command.args(&step.args).envs(step.env.iter().cloned());
+    command
+        .args(&step.args)
+        .envs(step.env.iter().cloned())
+        .stdin(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    let status = command
-        .status()
-        .map_err(|err| Error::prepare_failed(err.to_string()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::prepare_failed(format!(
-            "{} {} failed",
-            step.program,
-            step.args.join(" ")
-        )))
+    let output = command
+        .output()
+        .map_err(|err| Error::prepare_failed(format!("{}: {err}", step.purpose)))?;
+    if output.status.success() {
+        return Ok(());
     }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut detail = stderr.trim().to_string();
+    if detail.is_empty() {
+        detail = stdout.trim().to_string();
+    }
+    if detail.len() > 300 {
+        let mut start = detail.len() - 300;
+        while !detail.is_char_boundary(start) {
+            start += 1;
+        }
+        detail = detail[start..].to_string();
+    }
+    Err(Error::prepare_failed(format!("{}: {detail}", step.purpose)))
 }
 
 fn systemctl_is_active(unit: &str) -> bool {

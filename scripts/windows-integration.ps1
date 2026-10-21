@@ -5,6 +5,7 @@
 param([switch]$Tunnel)
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $priv = Join-Path $root 'target\release\tunelito-priv.exe'
 $cloudflared = Join-Path $root 'embed\cloudflared.exe'
@@ -12,6 +13,37 @@ $work = Join-Path $env:TEMP "tunelito-ci-$PID"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $tunnelProc = $null
 $tunnelNote = 'skipped'
+
+function Show-Setup {
+    Write-Host '--- setup ---'
+    $user = Get-LocalUser -Name 'tunelito' -ErrorAction SilentlyContinue
+    if ($user) { Write-Host "user enabled=$($user.Enabled) sid=$($user.SID)" } else { Write-Host 'user missing' }
+    Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue | ForEach-Object {
+        $image = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
+        if ($image -like '*tunelito*') { Write-Host "profile $image" }
+    }
+    foreach ($path in @(
+            'C:\Users\tunelito',
+            'C:\Users\tunelito\.ssh\authorized_keys',
+            'C:\ProgramData\ssh\administrators_authorized_keys'
+        )) {
+        if (Test-Path -LiteralPath $path) {
+            Write-Host "present $path"
+            if (-not (Get-Item -LiteralPath $path).PSIsContainer) {
+                Get-Content -LiteralPath $path | ForEach-Object { Write-Host $_ }
+            }
+            icacls $path
+        }
+        else {
+            Write-Host "absent $path"
+        }
+    }
+    $cfg = 'C:\ProgramData\ssh\sshd_config'
+    if (Test-Path $cfg) {
+        Select-String -Path $cfg -Pattern 'tunelito|AuthorizedKeysFile|AuthenticationMethods' |
+            ForEach-Object { Write-Host $_.Line.Trim() }
+    }
+}
 
 function Invoke-Cleanup {
     if ($script:tunnelProc -and -not $script:tunnelProc.HasExited) {
@@ -44,35 +76,22 @@ try {
     $resultPath = Join-Path $work 'result.json'
     [System.IO.File]::WriteAllText($requestPath, $request)
     & $priv apply --request $requestPath --root C:\ --execute --windows --result $resultPath
-    if ($LASTEXITCODE -ne 0) {
-        $detail = if (Test-Path $resultPath) { Get-Content $resultPath -Raw } else { 'no result file' }
-        throw "tunelito-priv failed ($LASTEXITCODE): $detail"
-    }
+    $exit = $LASTEXITCODE
+    $resultText = if (Test-Path $resultPath) { Get-Content $resultPath -Raw } else { '' }
+    Write-Host "priv exit=$exit result=$resultText"
+    if (-not $resultText) { throw "tunelito-priv produced no result (exit $exit)" }
+    $parsed = $resultText | ConvertFrom-Json
+    if (-not $parsed.ok) { throw "tunelito-priv failed: $($parsed.detail)" }
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
         throw 'OpenSSH client (ssh) is not on PATH'
     }
-    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\ssh\logs' | Out-Null
-    $cfgPath = 'C:\ProgramData\ssh\sshd_config'
-    $cfg = Get-Content $cfgPath -Raw
-    if ($cfg -notmatch '(?m)^LogLevel ') {
-        $cfg = $cfg -replace '(?m)^Match ', "LogLevel DEBUG3`r`n`r`nMatch "
-        Set-Content -Path $cfgPath -Value $cfg -Encoding ascii
-        Restart-Service sshd
-    }
-    Write-Host '--- profile, key file, permissions ---'
-    Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' | ForEach-Object {
-        $image = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
-        if ($image -like '*tunelito*') { Write-Host "profile $image" }
-    }
-    Get-Content 'C:\Users\tunelito\.ssh\authorized_keys' -ErrorAction Continue | ForEach-Object { Write-Host $_ }
-    icacls 'C:\Users\tunelito'
-    icacls 'C:\Users\tunelito\.ssh'
-    icacls 'C:\Users\tunelito\.ssh\authorized_keys'
-    $sshOut = & ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -i $key -p 22 tunelito@127.0.0.1 echo tunelito-ok 2>&1 | Out-String
+    Show-Setup
+    $sshOut = & ssh -v -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -i $key -p 22 tunelito@127.0.0.1 echo tunelito-ok 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
         Write-Host $sshOut
-        $sshdLog = 'C:\ProgramData\ssh\logs\sshd.log'
-        if (Test-Path $sshdLog) { Get-Content $sshdLog -Tail 60 | ForEach-Object { Write-Host $_ } }
+        Show-Setup
+        Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 25 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "$($_.TimeCreated.ToString('o')) $($_.Message)" }
         throw "localhost ssh failed: $LASTEXITCODE"
     }
     Write-Host 'verified: OpenSSH capability, tunelito user, sshd, localhost pubkey login'

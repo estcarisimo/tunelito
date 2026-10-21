@@ -263,39 +263,53 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
     if account_is_admin {
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(ADMIN_KEYS, "*S-1-5-32-544:(F)"),
+            &acl_script(ADMIN_KEYS, &["*S-1-5-32-544:(F)"]),
         ));
     } else {
+        // The profile directory must keep Administrators. OpenSSH rejects an
+        // authorized_keys file that other accounts can write.
         steps.push(ps(
             "acl_profile",
-            &acl_script(USER_HOME, "tunelito:(OI)(CI)F"),
+            &acl_script(
+                USER_HOME,
+                &["*S-1-5-32-544:(OI)(CI)F", "tunelito:(OI)(CI)F"],
+            ),
         ));
         steps.push(ps(
             "acl_ssh_dir",
-            &acl_script(USER_SSH_DIR, "tunelito:(OI)(CI)F"),
+            &acl_script(
+                USER_SSH_DIR,
+                &["*S-1-5-32-544:(OI)(CI)F", "tunelito:(OI)(CI)F"],
+            ),
         ));
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(USER_KEYS, "tunelito:(R)"),
+            &acl_script(USER_KEYS, &["*S-1-5-32-544:(F)", "tunelito:(R)"]),
         ));
     }
     steps.push(ps(
         "acl_request_dir",
-        &acl_script(STATE_DIR, "*S-1-5-32-545:(OI)(CI)F"),
+        &acl_script(STATE_DIR, &["*S-1-5-32-545:(OI)(CI)F"]),
     ));
     steps
 }
 
-fn acl_script(path: &str, extra_grant: &str) -> String {
+fn acl_script(path: &str, grants: &[&str]) -> String {
+    let mut args = String::from("'*S-1-5-18:(OI)(CI)F'");
+    for grant in grants {
+        args.push_str(" '");
+        args.push_str(&grant.replace('\'', ""));
+        args.push('\'');
+    }
     format!(
         "$path = '{path}'; \
          if (-not (Test-Path -LiteralPath $path)) {{ throw \"missing $path\" }}; \
          $icacls = Join-Path $env:SystemRoot 'System32\\icacls.exe'; \
-         & $icacls $path /inheritance:r | Out-Null; \
-         & $icacls $path /grant:r '*S-1-5-18:(OI)(CI)F' '{extra_grant}' | Out-Null; \
-         if ($LASTEXITCODE -ne 0) {{ throw 'icacls failed' }}",
+         & $icacls $path /inheritance:r; \
+         if ($LASTEXITCODE -ne 0) {{ throw \"icacls inheritance failed on $path\" }}; \
+         & $icacls $path /grant:r {args}; \
+         if ($LASTEXITCODE -ne 0) {{ throw \"icacls grant failed on $path\" }}",
         path = path.replace('\'', ""),
-        extra_grant = extra_grant,
     )
 }
 
@@ -305,7 +319,7 @@ fn acl_script(path: &str, extra_grant: &str) -> String {
 pub fn create_profile_command() -> CommandStep {
     ps(
         "create_user_profile",
-        r#"$sid = (New-Object System.Security.Principal.NTAccount('tunelito')).Translate([System.Security.Principal.SecurityIdentifier]).Value; $key = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"; if (Test-Path -LiteralPath $key) { exit 0 }; if (-not ('Win32.UserEnv' -as [type])) { Add-Type -Namespace Win32 -Name UserEnv -MemberDefinition '[DllImport("userenv.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int CreateProfile(string pszUserSid, string pszUserName, System.Text.StringBuilder pszProfilePath, uint cchProfilePath);' }; $buf = New-Object System.Text.StringBuilder 260; $code = [Win32.UserEnv]::CreateProfile($sid, 'tunelito', $buf, [uint32]$buf.Capacity); if ($code -ne 0 -and $code -ne -2147024713) { throw "CreateProfile failed: $code" }"#,
+        r#"$sid = (New-Object System.Security.Principal.NTAccount('tunelito')).Translate([System.Security.Principal.SecurityIdentifier]).Value; if ([string]::IsNullOrWhiteSpace($sid)) { throw 'tunelito has no SID' }; $reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"; $dest = 'C:\Users\tunelito'; if ((Test-Path -LiteralPath $dest) -and -not (Test-Path -LiteralPath $reg)) { Remove-Item -LiteralPath $dest -Recurse -Force }; if (-not (Test-Path -LiteralPath $reg)) { if (-not ('Tunelito.NativeProfile' -as [type])) { Add-Type -Namespace Tunelito -Name NativeProfile -MemberDefinition '[DllImport("userenv.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern int CreateProfile(string pszUserSid, string pszUserName, System.Text.StringBuilder pszProfilePath, uint cchProfilePath);' }; $buf = New-Object System.Text.StringBuilder 260; $code = [Tunelito.NativeProfile]::CreateProfile($sid, 'tunelito', $buf, [uint32]260); if ($code -ne 0 -and $code -ne -2147024713) { throw "CreateProfile failed: $code path=$($buf.ToString())" } }; $image = (Get-ItemProperty -LiteralPath $reg -Name ProfileImagePath).ProfileImagePath; if ($image -ne $dest) { throw "profile path is [$image]" }; if (-not (Test-Path -LiteralPath $dest)) { throw 'profile directory missing' }"#,
     )
 }
 
@@ -384,19 +398,7 @@ pub fn close_firewall_command() -> CommandStep {
 }
 
 fn ps(purpose: &'static str, script: &str) -> CommandStep {
-    CommandStep::new(
-        OsKind::Windows,
-        "powershell",
-        vec![
-            "-NoProfile".into(),
-            "-NonInteractive".into(),
-            "-WindowStyle".into(),
-            "Hidden".into(),
-            "-Command".into(),
-            script.into(),
-        ],
-        purpose,
-    )
+    crate::plan::powershell_step(purpose, script)
 }
 
 pub fn commands_open_firewall(steps: &[CommandStep]) -> bool {
@@ -459,11 +461,13 @@ Match Group administrators\n\
             .join("\n");
         assert!(user_blob.contains(USER_KEYS));
         assert!(user_blob.contains("S-1-5-18"));
-        assert!(user_blob.contains("tunelito"));
+        assert!(user_blob.contains("tunelito:(R)"));
         assert!(user_blob.contains("S-1-5-32-545"));
-        assert!(!user_blob.contains("S-1-5-32-544"));
+        assert!(user_blob.contains("S-1-5-32-544"));
+        assert!(!user_blob.contains(ADMIN_KEYS));
         assert!(admin_blob.contains(ADMIN_KEYS));
         assert!(admin_blob.contains("S-1-5-32-544"));
+        assert!(!admin_blob.contains(USER_KEYS));
         assert!(!user_blob.to_ascii_lowercase().contains("everyone"));
         assert!(!admin_blob.to_ascii_lowercase().contains("everyone"));
         assert!(!commands_open_firewall(&user));

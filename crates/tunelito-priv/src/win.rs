@@ -13,7 +13,8 @@ use tunelito_core::plan::{
 use tunelito_core::sshd::parse_sshd_effective;
 use tunelito_core::windows::{
     acl_commands, register_task_command, strip_tunelito_block, uninstall_commands,
-    write_windows_access_files, WindowsFilePlan, ADMIN_KEYS, PRIV_INSTALL, SSHD_CONFIG, USER_KEYS,
+    write_windows_access_files, WindowsFilePlan, ADMIN_KEYS, PRIV_INSTALL, SSHD_CONFIG, USER_HOME,
+    USER_KEYS,
 };
 use tunelito_core::Error;
 
@@ -53,6 +54,15 @@ pub fn execute(request: &AccessRequest) -> Result<(), Error> {
         write_windows_access_files(Path::new(r"C:\"), &plan)?;
         for step in acl_commands(plan.account_is_admin) {
             super::run_step(&step)?;
+        }
+        if request.write_keys {
+            let key_path = tunelito_core::windows::authorized_keys_path(plan.account_is_admin);
+            if !Path::new(key_path).is_file() {
+                return Err(Error::prepare_failed(format!("missing {key_path}")));
+            }
+        }
+        if !plan.account_is_admin && !Path::new(USER_HOME).is_dir() {
+            return Err(Error::prepare_failed("missing profile C:\\Users\\tunelito"));
         }
     }
     if request.reload_sshd {
@@ -125,7 +135,7 @@ fn probe_windows() -> Probe {
     probe.windows_startup_automatic =
         ps_true("(Get-Service -Name sshd -ErrorAction SilentlyContinue).StartType -eq 'Automatic'");
     probe.windows_user_is_admin = ps_true(
-        "$m = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue); [bool]($m | Where-Object { $_.Name -like '*\\tunelito' })",
+        "$u = Get-LocalUser -Name 'tunelito' -ErrorAction SilentlyContinue; if (-not $u) { 'False'; exit 0 }; $g = Get-LocalGroup -SID 'S-1-5-32-544'; $hit = @(Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Where-Object { $_.SID -eq $u.SID }); [bool]($hit.Count -gt 0)",
     );
     if let Ok(config) = fs::read_to_string(SSHD_CONFIG) {
         let parsed = parse_sshd_effective(&config);
@@ -146,8 +156,12 @@ fn ps_true(script: &str) -> bool {
             "-WindowStyle",
             "Hidden",
             "-Command",
-            script,
+            "Invoke-Expression $env:TUNELITO_PS",
         ])
+        .env(
+            "TUNELITO_PS",
+            format!("$ErrorActionPreference = 'Stop'; {script}"),
+        )
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .output()

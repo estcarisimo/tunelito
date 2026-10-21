@@ -32,7 +32,12 @@ impl CommandStep {
     }
 
     pub fn line(&self) -> String {
-        format!("{} {}", self.program, self.args.join(" "))
+        let mut text = format!("{} {}", self.program, self.args.join(" "));
+        for (_name, value) in &self.env {
+            text.push('\n');
+            text.push_str(value);
+        }
+        text
     }
 
     pub fn is_forbidden_autostart(&self) -> bool {
@@ -232,7 +237,7 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
                 // A blank password is refused for network logon, including public-key SSH.
                 steps.push(windows_ps(
                     "create_dedicated_user",
-                    "$bytes = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $sec = ConvertTo-SecureString ([Convert]::ToBase64String($bytes)) -AsPlainText -Force; New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -Password $sec -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires; Enable-LocalUser -Name 'tunelito'",
+                    "$bytes = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $sec = ConvertTo-SecureString ([Convert]::ToBase64String($bytes)) -AsPlainText -Force; New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -Password $sec -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires | Out-Null; Enable-LocalUser -Name 'tunelito'; if (-not (Get-LocalUser -Name 'tunelito').Enabled) { throw 'tunelito account is disabled' }",
                 ));
             }
             steps.push(crate::windows::create_profile_command());
@@ -370,19 +375,30 @@ fn strs(items: &[&str]) -> Vec<String> {
 }
 
 fn windows_ps(purpose: &'static str, script: &str) -> CommandStep {
-    CommandStep::new(
+    powershell_step(purpose, script)
+}
+
+/// The script travels in the environment. A quoted `-Command` argument is
+/// reparsed by powershell.exe and can drop the quotes around the script.
+pub(crate) fn powershell_step(purpose: &'static str, script: &str) -> CommandStep {
+    let mut step = CommandStep::new(
         OsKind::Windows,
-        "powershell",
+        "powershell.exe",
         strs(&[
             "-NoProfile",
             "-NonInteractive",
             "-WindowStyle",
             "Hidden",
             "-Command",
-            script,
+            "Invoke-Expression $env:TUNELITO_PS",
         ]),
         purpose,
-    )
+    );
+    step.env.push((
+        "TUNELITO_PS".into(),
+        format!("$ErrorActionPreference = 'Stop'; {script}"),
+    ));
+    step
 }
 
 #[cfg(test)]
@@ -464,7 +480,17 @@ mod tests {
         assert!(blob.contains("StartupType Manual"));
         assert!(blob.contains("New-LocalUser"));
         assert!(blob.contains("CreateProfile"));
+        assert!(blob.contains("ProfileImagePath"));
         assert!(!blob.contains("-NoPassword"));
+        let create = steps
+            .iter()
+            .find(|step| step.purpose == "create_dedicated_user")
+            .unwrap();
+        assert!(create.args.iter().all(|arg| !arg.contains('"')));
+        assert!(create
+            .env
+            .iter()
+            .any(|(key, value)| key == "TUNELITO_PS" && value.contains("New-LocalUser")));
         assert!(blob.contains("Remove-NetFirewallRule"));
         assert!(!blob.to_lowercase().contains("administrators"));
         assert!(!blob.to_lowercase().contains("automatic"));
