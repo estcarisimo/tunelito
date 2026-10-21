@@ -1,6 +1,6 @@
 # Instalar
 
-Esta es la computadora a la que querés entrar. Un archivo, un pedido, pegar la clave.
+Bajá un archivo de la última versión. Abrilo, aceptá el único pedido, pegá la clave.
 
 !!! warning
 
@@ -8,7 +8,7 @@ Esta es la computadora a la que querés entrar. Un archivo, un pedido, pegar la 
 
 ## Windows
 
-Bajá `tunelito.exe` y abrilo. Aceptá el único pedido de UAC. Pegá la clave. Tocá el botón.
+<a href="https://github.com/estcarisimo/tunelito/releases/latest/download/tunelito.exe">tunelito.exe</a>. Abrilo, aceptá las pantallas de Windows, pegá la clave, tocá el botón.
 
 La página para mandarle: [Para vos](guia.md).
 
@@ -16,14 +16,14 @@ Hay un instalador, y es opcional. No hace falta el menú Inicio.
 
 ## macOS
 
-Abrí el `.dmg` y arrastrá Tunelito a Aplicaciones. Abrilo. Aceptá el único pedido.
+<a href="https://github.com/estcarisimo/tunelito/releases/latest/download/tunelito.dmg">tunelito.dmg</a>. Abrilo, arrastrá Tunelito a Aplicaciones, abrilo, aceptá el único pedido.
 
 ## Debian
 
-Instalá el `.deb`, o ejecutá el AppImage. Abrí Tunelito. Aceptá el único pedido (`pkexec` o `sudo`).
+<a href="https://github.com/estcarisimo/tunelito/releases/latest/download/tunelito.deb">tunelito.deb</a> o <a href="https://github.com/estcarisimo/tunelito/releases/latest/download/tunelito.AppImage">tunelito.AppImage</a>. Instalá o ejecutá, abrí Tunelito, aceptá el único pedido.
 
 Ese pedido instala OpenSSH si falta, crea la cuenta `tunelito` (no es administradora) y no deja nada prendido al iniciar el equipo.
 
 ## Después
 
-Copiá o compartí la dirección. Dejalo prendido solo mientras querés que esté conectada. El tiempo arranca en 2 horas (de 15 minutos a 24 horas). Cerrar la ventana lo apaga.
+Copiá o compartí la dirección. Dejalo prendido solo mientras querés que esté conectada. El tiempo arranca en 2 horas. Cerrar la ventana lo apaga.
