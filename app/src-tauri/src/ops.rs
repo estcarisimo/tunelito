@@ -488,12 +488,43 @@ fn apply_linux(request: &AccessRequest) -> Result<(), Error> {
 
 #[cfg(target_os = "macos")]
 fn apply_macos(request: &AccessRequest) -> Result<(), Error> {
-    // UNTESTED ON CI. The command list is the one unit-tested in `plan`.
-    let _ = (request, coverage_note(OsKind::Macos));
-    Err(Error::with_detail(
-        "needs_admin",
-        coverage_note(OsKind::Macos),
-    ))
+    // UNTESTED ON CI. The helper's macOS steps are unit-tested in `tunelito_core::macos`.
+    let bin = priv_binary().ok_or_else(Error::needs_admin)?;
+    // $TMPDIR on macOS is per user and mode 0700.
+    let path = std::env::temp_dir().join(format!("tunelito-request-{}.json", std::process::id()));
+    fs::write(
+        &path,
+        serde_json::to_string(request).map_err(|err| Error::with_detail("io", err.to_string()))?,
+    )?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    // Paths go in as argv and through `quoted form of`, never spliced into the script.
+    let output = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "do shell script (quoted form of item 1 of argv) & \" apply --macos --root / --execute --request \" & (quoted form of item 2 of argv) with administrator privileges",
+            "-e",
+            "end run",
+        ])
+        .arg(&bin)
+        .arg(&path)
+        .output();
+    let _ = fs::remove_file(&path);
+    let output = output.map_err(|err| Error::prepare_failed(err.to_string()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("-128") {
+            // The person pressed Cancel on the password prompt.
+            return Err(Error::needs_admin());
+        }
+        Err(Error::prepare_failed(stderr.trim().to_string()))
+    }
 }
 
 #[cfg(target_os = "windows")]

@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use clap::Parser;
-use tunelito_core::access::{write_linux_access_files, AccessRequest};
+use tunelito_core::access::{write_linux_access_files, write_macos_access_files, AccessRequest};
 use tunelito_core::plan::{
     activate_commands, disable_commands, install_commands, reload_command, Probe,
 };
 use tunelito_core::windows::{write_windows_access_files, WindowsFilePlan};
 use tunelito_core::Error;
 
+#[cfg(unix)]
+mod mac;
 #[cfg(windows)]
 mod win;
 
@@ -36,6 +38,9 @@ enum Cmd {
         /// Write the Windows OpenSSH layout. On Windows, `--execute` runs it.
         #[arg(long)]
         windows: bool,
+        /// Write the macOS layout. On macOS this is the default, and `--execute` runs it.
+        #[arg(long)]
+        macos: bool,
         /// JSON `{"ok":true|false,"detail":"..."}` for the app that launched us without a console.
         #[arg(long)]
         result: Option<PathBuf>,
@@ -65,9 +70,11 @@ fn run() -> Result<(), Error> {
             root,
             execute,
             windows,
+            macos,
             result,
         } => {
-            let outcome = apply(&request, &root, execute, windows);
+            let macos = macos || cfg!(target_os = "macos");
+            let outcome = apply(&request, &root, execute, windows, macos);
             write_result(result.as_deref(), &outcome);
             outcome
         }
@@ -99,6 +106,7 @@ fn apply(
     root: &std::path::Path,
     execute: bool,
     windows: bool,
+    macos: bool,
 ) -> Result<(), Error> {
     // The request may sit in a directory a less trusted account can write.
     // Refuse a link there instead of reading whatever it points at.
@@ -110,6 +118,9 @@ fn apply(
         .map_err(|err| Error::with_detail("prepare_failed", err.to_string()))?;
     if windows {
         return apply_windows(&request, root, execute);
+    }
+    if macos {
+        return apply_macos(&request, root, execute);
     }
     if execute {
         if root != std::path::Path::new("/") {
@@ -159,6 +170,31 @@ fn apply(
                 run_step(&step)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn apply_macos(request: &AccessRequest, root: &Path, execute: bool) -> Result<(), Error> {
+    if execute {
+        if root != Path::new("/") {
+            return Err(Error::prepare_failed(
+                "refusing to run system commands against a fake root",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            return mac::execute(request);
+        }
+        #[cfg(not(unix))]
+        {
+            return Err(Error::prepare_failed(
+                "refusing to run macOS commands on this operating system",
+            ));
+        }
+    }
+    let written = write_macos_access_files(root, request)?;
+    for path in &written {
+        println!("{}", path.display());
     }
     Ok(())
 }
