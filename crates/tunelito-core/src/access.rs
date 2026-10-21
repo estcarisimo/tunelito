@@ -24,6 +24,13 @@ pub struct AccessRequest {
     pub stop_sshd: bool,
     #[serde(default)]
     pub reload_sshd: bool,
+    /// Used when writing the Windows layout without a live probe (tests, fake root).
+    #[serde(default)]
+    pub windows_account_is_admin: bool,
+    #[serde(default)]
+    pub windows_set_global_max_sessions: bool,
+    #[serde(default)]
+    pub windows_add_sftp: bool,
 }
 
 /// Filesystem half of turning access on. System commands stay in the planner.
@@ -114,6 +121,9 @@ mod tests {
             start_sshd: false,
             stop_sshd: false,
             reload_sshd: false,
+            windows_account_is_admin: false,
+            windows_set_global_max_sessions: false,
+            windows_add_sftp: false,
         };
         write_linux_access_files(&root, &request).unwrap();
         let dropin =
@@ -146,6 +156,9 @@ mod tests {
             start_sshd: false,
             stop_sshd: false,
             reload_sshd: false,
+            windows_account_is_admin: false,
+            windows_set_global_max_sessions: false,
+            windows_add_sftp: false,
         };
         write_linux_access_files(&root, &cleared).unwrap();
         let keys = fs::read_to_string(root.join("home/tunelito/.ssh/authorized_keys")).unwrap();
@@ -165,6 +178,9 @@ mod tests {
             start_sshd: false,
             stop_sshd: false,
             reload_sshd: false,
+            windows_account_is_admin: false,
+            windows_set_global_max_sessions: false,
+            windows_add_sftp: false,
         };
         assert_eq!(
             write_linux_access_files(&root, &request).unwrap_err().code,

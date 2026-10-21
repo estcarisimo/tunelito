@@ -48,6 +48,8 @@ impl Runtime {
         if !effects.is_empty() {
             let _ = runtime.apply_effects(&effects);
         }
+        #[cfg(windows)]
+        crate::windows_host::spawn_setup();
         runtime
     }
 
@@ -225,6 +227,9 @@ impl Runtime {
                 start_sshd: false,
                 stop_sshd: true,
                 reload_sshd: false,
+                windows_account_is_admin: false,
+                windows_set_global_max_sessions: false,
+                windows_add_sftp: false,
             };
             drop(host);
             apply_access(&request)?;
@@ -254,6 +259,11 @@ impl Runtime {
         {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
         }
         let mut child = cmd
             .spawn()
@@ -354,6 +364,9 @@ fn access_request(host: &Host, prepare: bool) -> AccessRequest {
         start_sshd: prepare,
         stop_sshd: false,
         reload_sshd,
+        windows_account_is_admin: probe.windows_user_is_admin,
+        windows_set_global_max_sessions: false,
+        windows_add_sftp: false,
     }
 }
 
@@ -483,16 +496,7 @@ fn apply_macos(request: &AccessRequest) -> Result<(), Error> {
 
 #[cfg(target_os = "windows")]
 fn apply_windows(request: &AccessRequest) -> Result<(), Error> {
-    // UNTESTED ON CI. Install steps are `plan::install_commands` for Windows.
-    let _ = (
-        request,
-        windows_event_log_command(),
-        coverage_note(OsKind::Windows),
-    );
-    Err(Error::with_detail(
-        "needs_admin",
-        coverage_note(OsKind::Windows),
-    ))
+    crate::windows_host::apply(request)
 }
 
 fn priv_binary() -> Option<PathBuf> {
@@ -560,6 +564,11 @@ fn ensure_cloudflared(paths: &AppPaths) -> Result<PathBuf, Error> {
     let asset = select_asset(OsKind::current(), Arch::current()?)?;
     let dest = paths.cloudflared_path();
     if file_matches(&dest, asset.sha256_hex) || marker_matches(&dest, asset.sha256_hex) {
+        return Ok(dest);
+    }
+    if let Some(bytes) = crate::embed::embedded_cloudflared() {
+        install_asset_bytes(bytes, asset, &dest)?;
+        let _ = fs::write(marker_path(&dest), asset.sha256_hex);
         return Ok(dest);
     }
     let bytes = http_get(&download_url(asset))?;

@@ -43,6 +43,12 @@ jobs:
         run: npm ci
       - name: Helper binaries
         run: cargo build --release -p tunelito-connect -p tunelito-priv
+      - name: Embed cloudflared into the Windows exe
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/stage-embed.ps1
+        env:
+          TUNELITO_EMBED_DIR: ${{ github.workspace }}/embed
       - name: Bundle the host app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -58,15 +64,24 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CODESIGN_ACCOUNT: ${{ secrets.AZURE_CODESIGN_ACCOUNT }}
+          AZURE_CODESIGN_PROFILE: ${{ secrets.AZURE_CODESIGN_PROFILE }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG: ${{ secrets.SIGNPATH_ORG }}
+          SIGNPATH_PROJECT: ${{ secrets.SIGNPATH_PROJECT }}
+          SIGNPATH_POLICY: ${{ secrets.SIGNPATH_POLICY }}
+          TUNELITO_EMBED_DIR: ${{ github.workspace }}/embed
         with:
           projectPath: app
           tagName: ${{ github.ref_name }}
           releaseName: Tunelito ${{ github.ref_name }}
           releaseBody: |
-            Draft installer build for ${{ github.ref_name }}.
-            Windows and macOS service control inside the app is not executed in CI.
-            Code-signing secrets are optional. Empty secrets produce unsigned installers.
-            `tunelito-connect` and `tunelito-priv` are attached as extra artifacts and are not yet inside the installer.
+            Draft build for ${{ github.ref_name }}.
+            The Windows file to download is the portable `tunelito.exe`. The installer is optional.
+            Signing secrets are optional. Empty secrets leave the files unsigned. See docs/SIGNING.md.
           releaseDraft: true
           prerelease: false
           args: --bundles ${{ matrix.bundles }}

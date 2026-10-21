@@ -1,4 +1,7 @@
+mod embed;
 mod ops;
+#[cfg(windows)]
+mod windows_host;
 
 use ops::Runtime;
 use tauri::{Manager, RunEvent};
@@ -58,6 +61,11 @@ fn update_settings(
 #[tauri::command]
 fn refresh(runtime: tauri::State<'_, Runtime>) -> Result<ViewModel, ApiError> {
     runtime.refresh().map_err(ApiError::from)
+}
+
+#[cfg(windows)]
+pub fn uninstall_windows() -> i32 {
+    windows_host::uninstall_exit()
 }
 
 pub fn run() {

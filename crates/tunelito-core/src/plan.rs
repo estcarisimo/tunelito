@@ -19,7 +19,7 @@ pub struct CommandStep {
 }
 
 impl CommandStep {
-    fn new(os: OsKind, program: &str, args: Vec<String>, purpose: &'static str) -> Self {
+    pub(crate) fn new(os: OsKind, program: &str, args: Vec<String>, purpose: &'static str) -> Self {
         Self {
             os,
             program: program.into(),
@@ -62,6 +62,9 @@ pub struct Probe {
     pub remote_login_on: bool,
     pub windows_capability_installed: bool,
     pub windows_startup_automatic: bool,
+    /// True when the dedicated account is already in Administrators.
+    /// OpenSSH then ignores `~\.ssh\authorized_keys`.
+    pub windows_user_is_admin: bool,
 }
 
 impl Probe {
@@ -80,6 +83,7 @@ impl Probe {
             remote_login_on: false,
             windows_capability_installed: false,
             windows_startup_automatic: false,
+            windows_user_is_admin: false,
         }
     }
 
@@ -208,40 +212,26 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
         OsKind::Windows => {
             // UNTESTED ON CI: Windows execution.
             if !probe.windows_capability_installed {
-                steps.push(CommandStep::new(
-                    OsKind::Windows,
-                    "powershell",
-                    strs(&[
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0",
-                    ]),
+                steps.push(windows_ps(
                     "install_openssh",
+                    "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0",
                 ));
-                steps.push(CommandStep::new(
-                    OsKind::Windows,
-                    "powershell",
-                    strs(&[
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        "Set-Service -Name sshd -StartupType Manual",
-                    ]),
+                steps.push(windows_ps(
                     "prevent_boot_autostart",
+                    "Set-Service -Name sshd -StartupType Manual",
+                ));
+                // The capability opens port 22 on the network. The tunnel is local.
+                steps.push(crate::windows::close_firewall_command());
+            } else if probe.windows_startup_automatic {
+                steps.push(windows_ps(
+                    "prevent_boot_autostart",
+                    "Set-Service -Name sshd -StartupType Manual",
                 ));
             }
             if !probe.user_exists {
-                steps.push(CommandStep::new(
-                    OsKind::Windows,
-                    "powershell",
-                    strs(&[
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        "New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -NoPassword -UserMayNotChangePassword -AccountNeverExpires; Enable-LocalUser -Name 'tunelito'",
-                    ]),
+                steps.push(windows_ps(
                     "create_dedicated_user",
+                    "New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -NoPassword -UserMayNotChangePassword -AccountNeverExpires; Enable-LocalUser -Name 'tunelito'",
                 ));
             }
         }
@@ -272,17 +262,7 @@ pub fn activate_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
             ));
         }
         OsKind::Windows => {
-            steps.push(CommandStep::new(
-                OsKind::Windows,
-                "powershell",
-                strs(&[
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    "Start-Service sshd",
-                ]),
-                "start_sshd",
-            ));
+            steps.push(windows_ps("start_sshd", "Start-Service sshd"));
         }
     }
     Ok(steps)
@@ -303,17 +283,7 @@ pub fn reload_command(probe: &Probe) -> Result<CommandStep, Error> {
             strs(&["kickstart", "-k", "system/com.openssh.sshd"]),
             "reload_sshd",
         ),
-        OsKind::Windows => CommandStep::new(
-            OsKind::Windows,
-            "powershell",
-            strs(&[
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Restart-Service sshd",
-            ]),
-            "reload_sshd",
-        ),
+        OsKind::Windows => windows_ps("reload_sshd", "Restart-Service sshd"),
     })
 }
 
@@ -338,17 +308,9 @@ pub fn disable_commands(
                 strs(&["kill", "SIGTERM", "system/com.openssh.sshd"]),
                 "stop_sshd",
             )),
-            OsKind::Windows => steps.push(CommandStep::new(
-                OsKind::Windows,
-                "powershell",
-                strs(&[
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    "Stop-Service sshd",
-                ]),
-                "stop_sshd",
-            )),
+            OsKind::Windows => {
+                steps.push(windows_ps("stop_sshd", "Stop-Service sshd"));
+            }
         }
     }
     // If we were the ones who turned Remote Login on, turn it back off.
@@ -392,7 +354,7 @@ pub fn coverage_note(os: OsKind) -> &'static str {
             "UNTESTED ON CI: macOS Remote Login, sysadminctl, and launchctl are not executed here."
         }
         OsKind::Windows => {
-            "UNTESTED ON CI: Windows OpenSSH capability, service control, and local-user creation are not executed here."
+            "Windows OpenSSH setup is executed on windows-latest. The Linux job only checks this command text."
         }
     }
 }
@@ -403,6 +365,22 @@ pub fn assert_user_constant() -> Result<(), Error> {
 
 fn strs(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_string()).collect()
+}
+
+fn windows_ps(purpose: &'static str, script: &str) -> CommandStep {
+    CommandStep::new(
+        OsKind::Windows,
+        "powershell",
+        strs(&[
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ]),
+        purpose,
+    )
 }
 
 #[cfg(test)]
@@ -483,11 +461,12 @@ mod tests {
         assert!(blob.contains("OpenSSH.Server~~~~0.0.1.0"));
         assert!(blob.contains("StartupType Manual"));
         assert!(blob.contains("New-LocalUser"));
+        assert!(blob.contains("Remove-NetFirewallRule"));
         assert!(!blob.to_lowercase().contains("administrators"));
         assert!(!blob.to_lowercase().contains("automatic"));
-        assert!(steps
-            .iter()
-            .all(|s| coverage_note(s.os).contains("UNTESTED ON CI")));
+        assert!(!blob.to_lowercase().contains("new-netfirewallrule"));
+        assert!(coverage_note(OsKind::Windows).contains("windows-latest"));
+        assert!(steps.iter().all(|s| !s.is_forbidden_autostart()));
     }
 
     #[test]

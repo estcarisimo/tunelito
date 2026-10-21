@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "Tunelito",
-    "subtitle": "Let someone you trust reach this computer over SSH."
+    "subtitle": "Open this, paste the key, send the address back."
   },
   "lang": {
     "en": "English",
@@ -9,7 +9,7 @@
   },
   "warning": {
     "title": "Only do this with someone you know.",
-    "body": "Turning this on gives that person control of the tunelito account and of the devices that account can open, such as a TV over USB. It is enough to cause real harm. If someone you do not know asks you to turn this on, say no."
+    "body": "If a stranger asks you to paste a key, say no."
   },
   "switch": {
     "on": "On",
@@ -17,8 +17,8 @@
     "starting": "Starting…",
     "turn_on": "Turn on",
     "turn_off": "Turn off",
-    "confirm_on": "Turn on access?",
-    "confirm_on_body": "The person whose key you added will be able to connect until the timer runs out or you turn this off.",
+    "confirm_on": "Turn it on?",
+    "confirm_on_body": "This gives them a shell on this computer.",
     "confirm": "Yes, turn it on",
     "cancel": "Cancel",
     "need_key": "Add your helper's public key before turning this on."
@@ -41,15 +41,17 @@
   "tunnel": {
     "hostname": "Name to send your helper",
     "copy": "Copy",
+    "share": "Share",
     "copied": "Copied",
     "waiting": "Opening the tunnel…",
     "off_hint": "Turn it on to get a name you can send.",
     "snippet": "Text for your helper's SSH config",
-    "snippet_help": "Your helper can paste this, or run tunelito-connect with the name above.",
+    "snippet_help": "They paste this into ~/.ssh/config, install cloudflared, then run ssh with that name.",
     "copy_snippet": "Copy SSH config"
   },
   "keys": {
     "title": "Accepted keys",
+    "label": "Paste the key they sent you",
     "help": "Paste the public key your helper sent you, for example on WhatsApp.",
     "placeholder": "ssh-ed25519 AAAA… comment",
     "add": "Add key",
@@ -75,11 +77,14 @@
     "asn": "ASN",
     "rdns": "Reverse DNS",
     "os": "Operating system",
-    "no_hello": "No hello from the helper yet.",
+    "no_hello": "No client info.",
     "unmatched_hello": "A hello arrived that did not match a session."
   },
   "settings": {
     "title": "Settings"
+  },
+  "more": {
+    "summary": "Details"
   },
   "activity": {
     "downloading_cloudflared": "Downloading cloudflared…",

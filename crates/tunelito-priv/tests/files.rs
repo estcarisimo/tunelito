@@ -57,3 +57,65 @@ fn files_only_apply_writes_under_the_given_root() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn windows_layout_under_a_fake_root_refuses_execute() {
+    let dir = std::env::temp_dir().join(format!("tunelito-priv-win-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let key_dir = dir.join("key");
+    fs::create_dir_all(&key_dir).unwrap();
+    let (parsed, _) = tunelito_core::keys::ensure_keypair(&key_dir.join("k"), "helper").unwrap();
+    let request = serde_json::json!({
+        "authorized_key_lines": [parsed.public_key],
+        "write_keys": true,
+        "windows_set_global_max_sessions": true,
+        "windows_add_sftp": true
+    });
+    let request_path = dir.join("request.json");
+    fs::write(&request_path, request.to_string()).unwrap();
+    let root = dir.join("root");
+    let result = dir.join("result.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_tunelito-priv"))
+        .args([
+            "apply",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+            "--windows",
+            "--result",
+            result.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = fs::read_to_string(root.join("ProgramData/ssh/sshd_config")).unwrap();
+    assert!(config.contains("Match User tunelito"));
+    assert!(config.contains("Subsystem sftp sftp-server.exe"));
+    assert!(config.contains("MaxSessions 10"));
+    let keys = fs::read_to_string(root.join("Users/tunelito/.ssh/authorized_keys")).unwrap();
+    assert!(keys.contains("ssh-ed25519"));
+    let body: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&result).unwrap()).unwrap();
+    assert_eq!(body["ok"], true);
+
+    let execute = Command::new(env!("CARGO_BIN_EXE_tunelito-priv"))
+        .args([
+            "apply",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+            "--windows",
+            "--execute",
+        ])
+        .output()
+        .unwrap();
+    assert!(!execute.status.success());
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -38,3 +38,61 @@ jobs:
       - name: Build the window UI
         working-directory: app
         run: npm ci && npm run build
+
+  windows:
+    name: Windows portable exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Frontend dependencies
+        working-directory: app
+        run: npm ci
+      - name: Privileged helper
+        run: cargo build --release -p tunelito-priv
+      - name: Stage cloudflared and the helper for embedding
+        shell: pwsh
+        run: ./scripts/stage-embed.ps1
+        env:
+          TUNELITO_EMBED_DIR: ${{ github.workspace }}/embed
+      - name: Build the portable exe and the optional installer
+        working-directory: app
+        run: npm run tauri build -- --bundles nsis
+        env:
+          TUNELITO_EMBED_DIR: ${{ github.workspace }}/embed
+      - name: Sign if a secret is configured
+        shell: pwsh
+        run: ./scripts/sign-windows.ps1 target/release/tunelito.exe
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CODESIGN_ACCOUNT: ${{ secrets.AZURE_CODESIGN_ACCOUNT }}
+          AZURE_CODESIGN_PROFILE: ${{ secrets.AZURE_CODESIGN_PROFILE }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG: ${{ secrets.SIGNPATH_ORG }}
+          SIGNPATH_PROJECT: ${{ secrets.SIGNPATH_PROJECT }}
+          SIGNPATH_POLICY: ${{ secrets.SIGNPATH_POLICY }}
+      - name: Upload the portable exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunelito-exe
+          path: target/release/tunelito.exe
+          if-no-files-found: error
+      - name: Upload the optional installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunelito-nsis
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+      - name: Exercise setup and a localhost SSH login
+        shell: pwsh
+        run: ./scripts/windows-integration.ps1 -Tunnel
+        env:
+          TUNELITO_TUNNEL_BEST_EFFORT: "1"

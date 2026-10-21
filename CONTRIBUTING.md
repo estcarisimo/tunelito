@@ -7,7 +7,8 @@ Thanks for looking at the project. Tunelito is a small remote-access tool with a
 - The host must not start at boot, and neither should sshd or cloudflared when Tunelito is what installed them.
 - The remote account is `tunelito`. Do not aim the tunnel at the desktop user's account or at root.
 - A hello is unverified. Do not let a client set `verification` to anything else.
-- Windows and macOS service execution is not run in CI. If you change those command lists, keep the `UNTESTED ON CI` comments and extend the unit tests that lock the arguments.
+- Windows setup is exercised on `windows-latest`. macOS service execution is not. If you change a command list, extend the unit test that locks the arguments.
+- Code signing secrets are optional. See [docs/SIGNING.md](docs/SIGNING.md). Empty secrets leave the exe unsigned.
 
 ## Setup
 
@@ -22,7 +23,7 @@ cd app && npm ci && npm run build
 
 ## Tests that must stay offline
 
-CI must not download `cloudflared`, must not start a quick tunnel, and must not install OpenSSH or create the `tunelito` user. File-layout tests use a temporary directory. Command arguments are checked as data.
+The Linux job must not download `cloudflared`, start a quick tunnel, install OpenSSH, or create the `tunelito` user. File-layout tests use a temporary directory. The Windows job does the real setup on the runner and deletes the account afterwards.
 
 The window can be screenshotted from `app/` with `npm run dev` and `?preview=connected`. That page is sample data.
 
