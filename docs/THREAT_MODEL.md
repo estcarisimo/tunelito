@@ -1,6 +1,6 @@
 # Threat model
 
-Tunelito is a consent switch for a shell. The person at the keyboard is the one who decides a helper may connect, and the helper is assumed to be someone they already know.
+Tunelito is how you reach the computer of someone you want to help — a friend, your mom, your brother, your cousin, your partner — when that computer is behind NAT or CGNAT and they are not going to set up port forwarding. The person at the keyboard decides a helper may connect. The helper is someone they already know. Claude Code and USB devices are one use of the shell, not a separate trust decision.
 
 ## Assets
 

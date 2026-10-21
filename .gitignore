@@ -17,3 +17,5 @@ cloudflared.exe
 *.pfx
 .env
 .env.*
+site/
+.docs-venv/
