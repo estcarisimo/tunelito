@@ -12,7 +12,7 @@ Claude Code over SSH, and USB devices, are one way to use that session. They are
 
 **Only with someone you know.** A stranger who asks them to install this and paste a key is a scam.
 
-The guide for that person is the [docs site](https://estcarisimo.github.io/tunelito/). This file is for people working on Tunelito.
+Send them [Para vos](https://estcarisimo.github.io/tunelito/es/guia/): one page, in Spanish, with the screens. This file is for people working on Tunelito.
 
 ![Tunelito in English, access on](docs/images/tunelito-en.png)
 
@@ -43,7 +43,7 @@ Details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reports: [SECURITY.md](SE
 
 ## 🚀 Quick Start
 
-**On their computer.** Download `tunelito.exe` (or the `.dmg` / `.deb`), open it, accept the one prompt, paste the public key, press the button, send the address back.
+**On their computer.** Send them [Para vos](https://estcarisimo.github.io/tunelito/es/guia/). They download `tunelito.exe`, open it, accept the Windows screens, paste the public key, and send the address back.
 
 **On yours.** Install `cloudflared`. Send them only the public key (`ssh-keygen -t ed25519`). When the address arrives, use the SSH block under Details, then:
 
