@@ -1,4 +1,5 @@
 //! One UAC prompt on first use, then a scheduled task so later switches stay quiet.
+//! UNTESTED ON CI: the Windows job compiles this file and does not run it.
 //! The window itself stays unelevated. No console is shown.
 
 use std::fs;
@@ -7,7 +8,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tunelito_core::access::AccessRequest;
 use tunelito_core::windows::{REQUEST_FILE, RESULT_FILE, TASK_NAME};
@@ -17,7 +18,9 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn apply(request: &AccessRequest) -> Result<(), Error> {
     ensure_setup()?;
-    dispatch(request)
+    let mut request = request.clone();
+    request.windows_owner_sid = owner_sid();
+    dispatch(&request)
 }
 
 pub fn uninstall_exit() -> i32 {
@@ -83,6 +86,7 @@ fn setup_elevated() -> Result<(), Error> {
         windows_account_is_admin: false,
         windows_set_global_max_sessions: true,
         windows_add_sftp: true,
+        windows_owner_sid: owner_sid(),
     };
     dispatch_direct(&request, true)
 }
@@ -91,12 +95,14 @@ fn dispatch(request: &AccessRequest) -> Result<(), Error> {
     if windows_elevated() || !task_registered() {
         return dispatch_direct(request, !windows_elevated());
     }
-    fs::create_dir_all(r"C:\ProgramData\tunelito")?;
-    let _ = fs::remove_file(RESULT_FILE);
-    fs::write(
-        REQUEST_FILE,
-        serde_json::to_vec(request).map_err(|err| Error::with_detail("io", err.to_string()))?,
-    )?;
+    // Setup made the request directory writable by this account only, and the
+    // result directory read-only for it. A stale result is skipped by its time.
+    let started = SystemTime::now();
+    let body =
+        serde_json::to_vec(request).map_err(|err| Error::with_detail("io", err.to_string()))?;
+    if fs::write(REQUEST_FILE, body).is_err() {
+        return dispatch_direct(request, true);
+    }
     let status = Command::new("schtasks")
         .args(["/Run", "/TN", TASK_NAME])
         .creation_flags(CREATE_NO_WINDOW)
@@ -106,7 +112,7 @@ fn dispatch(request: &AccessRequest) -> Result<(), Error> {
     if !status.success() {
         return dispatch_direct(request, true);
     }
-    wait_result(Path::new(RESULT_FILE))
+    wait_result(Path::new(RESULT_FILE), Some(started))
 }
 
 fn dispatch_direct(request: &AccessRequest, elevate: bool) -> Result<(), Error> {
@@ -143,7 +149,7 @@ fn dispatch_direct(request: &AccessRequest, elevate: bool) -> Result<(), Error> 
     if !status.success() && !result_path.exists() {
         return Err(Error::needs_admin());
     }
-    wait_result(&result_path)
+    wait_result(&result_path, None)
 }
 
 fn elevate_priv(
@@ -172,9 +178,14 @@ fn elevate_priv(
         .map_err(|err| Error::prepare_failed(err.to_string()))
 }
 
-fn wait_result(path: &Path) -> Result<(), Error> {
+fn wait_result(path: &Path, since: Option<SystemTime>) -> Result<(), Error> {
     for _ in 0..180 {
-        if path.exists() {
+        let fresh = match (since, fs::metadata(path).and_then(|meta| meta.modified())) {
+            (_, Err(_)) => false,
+            (None, Ok(_)) => true,
+            (Some(since), Ok(modified)) => modified >= since,
+        };
+        if fresh {
             let text = fs::read_to_string(path).unwrap_or_default();
             let parsed: serde_json::Value = serde_json::from_str(&text)
                 .map_err(|err| Error::prepare_failed(err.to_string()))?;
@@ -216,6 +227,29 @@ fn priv_path() -> Result<PathBuf, Error> {
         return Ok(candidate);
     }
     Err(Error::needs_admin())
+}
+
+/// The SID of the account running the window, from `whoami /user`.
+fn owner_sid() -> Option<String> {
+    let output = Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let sid = text
+        .trim()
+        .rsplit(',')
+        .next()?
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    tunelito_core::windows::validate_owner_sid(&sid).ok()?;
+    Some(sid)
 }
 
 fn work_dir() -> Result<PathBuf, Error> {

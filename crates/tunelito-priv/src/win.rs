@@ -12,9 +12,10 @@ use tunelito_core::plan::{
 };
 use tunelito_core::sshd::parse_sshd_effective;
 use tunelito_core::windows::{
-    acl_commands, register_task_command, strip_tunelito_block, uninstall_commands,
-    write_windows_access_files, WindowsFilePlan, ADMIN_KEYS, PRIV_INSTALL, PROFILE_KEYS,
-    SSHD_CONFIG, USER_HOME, USER_KEYS,
+    acl_commands, register_task_command, state_acl_commands, strip_tunelito_block,
+    task_access_command, uninstall_commands, write_windows_access_files, WindowsFilePlan,
+    ADMIN_KEYS, HELLO_DIR, PRIV_INSTALL, PROFILE_KEYS, REQUEST_DIR, RESULT_DIR, SSHD_CONFIG,
+    USER_HOME, USER_KEYS,
 };
 use tunelito_core::Error;
 
@@ -24,14 +25,32 @@ pub fn execute(request: &AccessRequest) -> Result<(), Error> {
     if !is_elevated() {
         return Err(Error::needs_admin());
     }
-    install_self()?;
+    let from_task = install_self()?;
+    let owner = request.windows_owner_sid.as_deref();
     if request.prepare {
         let probe = probe_windows();
         for step in install_commands(&probe)? {
             super::run_step(&step)?;
         }
+    }
+    // UNTESTED ON CI. Every elevated run resets these DACLs, so a helper exe or
+    // request left writable by an older build is locked down again.
+    for dir in [REQUEST_DIR, RESULT_DIR, HELLO_DIR] {
+        fs::create_dir_all(dir)?;
+    }
+    for step in state_acl_commands(owner)? {
+        super::run_step(&step)?;
+    }
+    // Re-registered on every run through UAC, so the task always names the
+    // current request and result paths. Not from inside the task itself.
+    // Only the owner gets run rights.
+    if !from_task {
         if let Ok(step) = register_task_command(PRIV_INSTALL) {
-            let _ = super::run_step(&step);
+            if super::run_step(&step).is_ok() {
+                if let Some(sid) = owner {
+                    let _ = super::run_step(&task_access_command(sid)?);
+                }
+            }
         }
     }
     let probe = probe_windows();
@@ -109,17 +128,19 @@ pub fn uninstall() -> Result<(), Error> {
     Ok(())
 }
 
-fn install_self() -> Result<(), Error> {
+/// Copy this helper to the path the task runs. Returns true when it already
+/// is that copy, which means the scheduled task started it.
+fn install_self() -> Result<bool, Error> {
     let src = std::env::current_exe()?;
     let dest = Path::new(PRIV_INSTALL);
     if src == dest {
-        return Ok(());
+        return Ok(true);
     }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::copy(&src, dest)?;
-    Ok(())
+    Ok(false)
 }
 
 fn is_elevated() -> bool {

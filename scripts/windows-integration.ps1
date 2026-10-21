@@ -1,4 +1,6 @@
-# Runs on windows-latest as Administrator. Not a release.
+# Run by hand, as Administrator, on a disposable Windows VM. Not a release.
+# CI does not run this: it creates the tunelito account, starts sshd, and with
+# -Tunnel opens a public quick tunnel. See AGENTS.md.
 # Proves OpenSSH, the tunelito account, and a localhost key login.
 # -Tunnel tries one quick tunnel. A tunnel failure is reported and does not fail
 # the run when TUNELITO_TUNNEL_BEST_EFFORT=1. Cleanup always runs.

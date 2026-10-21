@@ -100,6 +100,11 @@ fn apply(
     execute: bool,
     windows: bool,
 ) -> Result<(), Error> {
+    // The request may sit in a directory a less trusted account can write.
+    // Refuse a link there instead of reading whatever it points at.
+    if fs::symlink_metadata(request_path)?.file_type().is_symlink() {
+        return Err(Error::prepare_failed("refusing a linked request file"));
+    }
     let text = fs::read_to_string(request_path)?;
     let request: AccessRequest = serde_json::from_str(&text)
         .map_err(|err| Error::with_detail("prepare_failed", err.to_string()))?;

@@ -27,11 +27,44 @@ pub const USER_SSH_DIR: &str = r"C:\Users\tunelito\.ssh";
 /// key has to live here too.
 pub const PROFILE_KEYS: &str = r"C:\Users\tunelito\.ssh\authorized_keys";
 pub const HELLO_DIR: &str = r"C:\ProgramData\tunelito\hellos";
+/// SYSTEM and Administrators change this tree. Users may only read it.
 pub const STATE_DIR: &str = r"C:\ProgramData\tunelito";
-pub const REQUEST_FILE: &str = r"C:\ProgramData\tunelito\request.json";
-pub const RESULT_FILE: &str = r"C:\ProgramData\tunelito\result.json";
+/// The SYSTEM task runs this file, so nobody but SYSTEM and Administrators may write it.
+pub const PRIV_DIR: &str = r"C:\ProgramData\tunelito\bin";
 pub const PRIV_INSTALL: &str = r"C:\ProgramData\tunelito\bin\tunelito-priv.exe";
+/// Only the account that ran setup may write here. The SYSTEM task reads it.
+pub const REQUEST_DIR: &str = r"C:\ProgramData\tunelito\requests";
+pub const REQUEST_FILE: &str = r"C:\ProgramData\tunelito\requests\request.json";
+/// The SYSTEM task writes here. The setup account may only read, so it cannot
+/// plant a link that turns the result write into a write somewhere else.
+pub const RESULT_DIR: &str = r"C:\ProgramData\tunelito\results";
+pub const RESULT_FILE: &str = r"C:\ProgramData\tunelito\results\result.json";
 pub const TASK_NAME: &str = "TunelitoPriv";
+
+const SYSTEM_SID: &str = "S-1-5-18";
+const ADMINS_SID: &str = "S-1-5-32-544";
+const USERS_SID: &str = "S-1-5-32-545";
+
+/// The account that ran setup, as sent by the unelevated window. Only a local,
+/// domain, Microsoft, or Entra user SID is accepted, never a well-known group.
+pub fn validate_owner_sid(sid: &str) -> Result<(), Error> {
+    let rest = sid
+        .strip_prefix("S-1-5-21-")
+        .or_else(|| sid.strip_prefix("S-1-12-1-"));
+    let ok = rest.is_some_and(|rest| {
+        let parts: Vec<&str> = rest.split('-').collect();
+        parts.len() >= 4
+            && parts.len() <= 8
+            && parts.iter().all(|part| {
+                !part.is_empty() && part.len() <= 10 && part.bytes().all(|b| b.is_ascii_digit())
+            })
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::prepare_failed("refusing that owner account"))
+    }
+}
 
 /// Administrators share one key file. Everyone else uses the ProgramData file,
 /// with the same lines copied to the profile path stock sshd already names.
@@ -318,15 +351,68 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
             ),
         ));
     }
+    steps
+}
+
+/// ACLs for `C:\ProgramData\tunelito`. Each directory gets a fresh, protected
+/// DACL, so an older install that let Users write here is repaired.
+/// `owner_sid` is the account allowed to drop requests for the SYSTEM task.
+/// UNTESTED ON CI: the command text is checked here, not executed.
+pub fn state_acl_commands(owner_sid: Option<&str>) -> Result<Vec<CommandStep>, Error> {
+    let locked = [
+        (SYSTEM_SID, "FullControl"),
+        (ADMINS_SID, "FullControl"),
+        (USERS_SID, "ReadAndExecute"),
+    ];
+    let mut steps = vec![
+        ps("acl_state_dir", &acl_script(STATE_DIR, &locked, true)),
+        ps("acl_priv_dir", &acl_script(PRIV_DIR, &locked, true)),
+        // The owner keeps WRITE_DAC, so the owner is reset to SYSTEM as well.
+        ps("acl_priv_exe", &acl_script(PRIV_INSTALL, &locked, true)),
+        ps(
+            "acl_hello_dir",
+            &acl_script(
+                HELLO_DIR,
+                &[
+                    (SYSTEM_SID, "FullControl"),
+                    (ADMINS_SID, "FullControl"),
+                    (USERS_SID, "ReadAndExecute"),
+                    ("tunelito", "Modify"),
+                ],
+                true,
+            ),
+        ),
+    ];
+    let mut request = vec![(SYSTEM_SID, "FullControl"), (ADMINS_SID, "FullControl")];
+    let mut result = request.clone();
+    if let Some(sid) = owner_sid {
+        validate_owner_sid(sid)?;
+        request.push((sid, "Modify"));
+        result.push((sid, "ReadAndExecute"));
+    }
     steps.push(ps(
         "acl_request_dir",
-        &acl_script(
-            STATE_DIR,
-            &[("S-1-5-18", "FullControl"), ("S-1-5-32-545", "FullControl")],
-            false,
-        ),
+        &acl_script(REQUEST_DIR, &request, true),
     ));
-    steps
+    steps.push(ps("acl_result_dir", &acl_script(RESULT_DIR, &result, true)));
+    Ok(steps)
+}
+
+/// Let the owner start the SYSTEM task without a UAC prompt. Nobody else gets
+/// read or run rights beyond the task's defaults.
+/// UNTESTED ON CI: the command text is checked here, not executed.
+pub fn task_access_command(owner_sid: &str) -> Result<CommandStep, Error> {
+    validate_owner_sid(owner_sid)?;
+    Ok(ps(
+        "grant_task_run",
+        &format!(
+            "$svc = New-Object -ComObject Schedule.Service; $svc.Connect(); \
+             $task = $svc.GetFolder('\\').GetTask('{TASK_NAME}'); \
+             $sddl = $task.GetSecurityDescriptor(4); \
+             $ace = '(A;;GRGX;;;{owner_sid})'; \
+             if (-not $sddl.Contains($ace)) {{ $task.SetSecurityDescriptor($sddl + $ace, 0) }}"
+        ),
+    ))
 }
 
 /// `grants` are `(sid or account, FileSystemRights)`. A fresh DACL drops every
@@ -534,7 +620,8 @@ Match Group administrators\n\
         assert!(user_blob.contains("S-1-5-18"));
         assert!(user_blob.contains("tunelito"));
         assert!(user_blob.contains("Read"));
-        assert!(user_blob.contains("S-1-5-32-545"));
+        // Users get nothing on the key files. The state tree is separate.
+        assert!(!user_blob.contains("S-1-5-32-545"));
         assert!(user_blob.contains("S-1-5-32-544"));
         assert!(!user_blob.contains(ADMIN_KEYS));
         assert!(admin_blob.contains(ADMIN_KEYS));
@@ -544,6 +631,102 @@ Match Group administrators\n\
         assert!(!admin_blob.to_ascii_lowercase().contains("everyone"));
         assert!(!commands_open_firewall(&user));
         assert!(!commands_open_firewall(&admin));
+    }
+
+    const OWNER: &str = "S-1-5-21-1004336348-1177238915-682003330-1001";
+
+    fn step_for(steps: &[CommandStep], purpose: &str) -> String {
+        steps
+            .iter()
+            .find(|step| step.purpose == purpose)
+            .map(|step| step.line())
+            .unwrap_or_else(|| panic!("no step {purpose}"))
+    }
+
+    #[test]
+    fn users_cannot_write_what_the_system_task_runs_or_reads() {
+        let steps = state_acl_commands(Some(OWNER)).unwrap();
+        for purpose in ["acl_state_dir", "acl_priv_dir", "acl_priv_exe"] {
+            let line = step_for(&steps, purpose);
+            assert!(line.contains("'S-1-5-32-545'; $rights = [System.Security.AccessControl.FileSystemRights]'ReadAndExecute'"), "{purpose}");
+            assert!(!line.contains("'S-1-5-32-545'; $rights = [System.Security.AccessControl.FileSystemRights]'FullControl'"), "{purpose}");
+            assert!(!line.contains("Modify"), "{purpose}");
+            assert!(!line.contains(OWNER), "{purpose}");
+            assert!(
+                line.contains("SetAccessRuleProtection($true, $false)"),
+                "{purpose}"
+            );
+            assert!(line.contains("/setowner *S-1-5-18"), "{purpose}");
+        }
+        assert!(step_for(&steps, "acl_priv_exe").contains(PRIV_INSTALL));
+        let request = step_for(&steps, "acl_request_dir");
+        assert!(request.contains(REQUEST_DIR));
+        assert!(request.contains(&format!(
+            "'{OWNER}'; $rights = [System.Security.AccessControl.FileSystemRights]'Modify'"
+        )));
+        assert!(!request.contains("S-1-5-32-545"));
+        let result = step_for(&steps, "acl_result_dir");
+        assert!(result.contains(RESULT_DIR));
+        assert!(result.contains(&format!(
+            "'{OWNER}'; $rights = [System.Security.AccessControl.FileSystemRights]'ReadAndExecute'"
+        )));
+        assert!(!result.contains("Modify"));
+        assert!(!result.contains("S-1-5-32-545"));
+        let hello = step_for(&steps, "acl_hello_dir");
+        assert!(hello.contains("$userSid"));
+        let blob = steps
+            .iter()
+            .map(|s| s.line())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!blob.to_ascii_lowercase().contains("everyone"));
+        assert!(!commands_open_firewall(&steps));
+        assert!(REQUEST_FILE.starts_with(REQUEST_DIR));
+        assert!(RESULT_FILE.starts_with(RESULT_DIR));
+        assert!(PRIV_INSTALL.starts_with(PRIV_DIR));
+    }
+
+    #[test]
+    fn without_an_owner_only_system_and_admins_touch_requests() {
+        let steps = state_acl_commands(None).unwrap();
+        for purpose in ["acl_request_dir", "acl_result_dir"] {
+            let line = step_for(&steps, purpose);
+            assert!(!line.contains("S-1-5-21-"), "{purpose}");
+            assert!(!line.contains("S-1-5-32-545"), "{purpose}");
+        }
+    }
+
+    #[test]
+    fn owner_sid_must_be_a_user_account() {
+        assert!(validate_owner_sid(OWNER).is_ok());
+        assert!(validate_owner_sid("S-1-12-1-3570634265-1102236330-2717461162-4135454934").is_ok());
+        for bad in [
+            "",
+            "S-1-5-18",
+            "S-1-5-32-544",
+            "S-1-5-32-545",
+            "S-1-1-0",
+            "S-1-5-11",
+            "S-1-5-21-1-2",
+            "S-1-5-21-1-2-3-x",
+            "S-1-5-21-1-2-3-4'; calc",
+            "S-1-5-21-1-2-3-4)(A;;GA;;;WD",
+        ] {
+            assert!(validate_owner_sid(bad).is_err(), "{bad}");
+            assert!(state_acl_commands(Some(bad)).is_err(), "{bad}");
+            assert!(task_access_command(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_the_owner_gets_run_rights_on_the_task() {
+        let line = task_access_command(OWNER).unwrap().line();
+        assert!(line.contains(TASK_NAME));
+        assert!(line.contains(&format!("(A;;GRGX;;;{OWNER})")));
+        assert!(!line.contains(";;;WD)"));
+        assert!(!line.contains(";;;BU)"));
+        assert!(!line.contains(";;;AU)"));
+        assert!(!line.contains("GA;;;"));
     }
 
     #[test]

@@ -31,6 +31,10 @@ pub struct AccessRequest {
     pub windows_set_global_max_sessions: bool,
     #[serde(default)]
     pub windows_add_sftp: bool,
+    /// SID of the Windows account that ran setup. It may drop requests for the
+    /// SYSTEM task and start that task. Checked by `windows::validate_owner_sid`.
+    #[serde(default)]
+    pub windows_owner_sid: Option<String>,
 }
 
 /// Filesystem half of turning access on. System commands stay in the planner.
@@ -124,6 +128,7 @@ mod tests {
             windows_account_is_admin: false,
             windows_set_global_max_sessions: false,
             windows_add_sftp: false,
+            windows_owner_sid: None,
         };
         write_linux_access_files(&root, &request).unwrap();
         let dropin =
@@ -159,6 +164,7 @@ mod tests {
             windows_account_is_admin: false,
             windows_set_global_max_sessions: false,
             windows_add_sftp: false,
+            windows_owner_sid: None,
         };
         write_linux_access_files(&root, &cleared).unwrap();
         let keys = fs::read_to_string(root.join("home/tunelito/.ssh/authorized_keys")).unwrap();
@@ -181,6 +187,7 @@ mod tests {
             windows_account_is_admin: false,
             windows_set_global_max_sessions: false,
             windows_add_sftp: false,
+            windows_owner_sid: None,
         };
         assert_eq!(
             write_linux_access_files(&root, &request).unwrap_err().code,

@@ -230,6 +230,7 @@ impl Runtime {
                 windows_account_is_admin: false,
                 windows_set_global_max_sessions: false,
                 windows_add_sftp: false,
+                windows_owner_sid: None,
             };
             drop(host);
             apply_access(&request)?;
@@ -367,6 +368,7 @@ fn access_request(host: &Host, prepare: bool) -> AccessRequest {
         windows_account_is_admin: probe.windows_user_is_admin,
         windows_set_global_max_sessions: false,
         windows_add_sftp: false,
+        windows_owner_sid: None,
     }
 }
 
@@ -496,6 +498,7 @@ fn apply_macos(request: &AccessRequest) -> Result<(), Error> {
 
 #[cfg(target_os = "windows")]
 fn apply_windows(request: &AccessRequest) -> Result<(), Error> {
+    // UNTESTED ON CI. The Windows job builds this; it does not run it.
     crate::windows_host::apply(request)
 }
 
