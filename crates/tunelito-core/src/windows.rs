@@ -263,54 +263,68 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
     if account_is_admin {
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(ADMIN_KEYS, &["*S-1-5-32-544:(F)"]),
+            &acl_script(ADMIN_KEYS, &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)"]),
         ));
     } else {
-        // The profile directory must keep Administrators. OpenSSH rejects an
-        // authorized_keys file that other accounts can write.
+        // sshd runs as SYSTEM. A grant without parentheses around the right
+        // is ignored, so SYSTEM could not read the key file.
         steps.push(ps(
             "acl_profile",
             &acl_script(
                 USER_HOME,
-                &["*S-1-5-32-544:(OI)(CI)F", "tunelito:(OI)(CI)F"],
+                &[
+                    "*S-1-5-18:(OI)(CI)(F)",
+                    "*S-1-5-32-544:(OI)(CI)(F)",
+                    "tunelito:(OI)(CI)(F)",
+                ],
             ),
         ));
         steps.push(ps(
             "acl_ssh_dir",
             &acl_script(
                 USER_SSH_DIR,
-                &["*S-1-5-32-544:(OI)(CI)F", "tunelito:(OI)(CI)F"],
+                &[
+                    "*S-1-5-18:(OI)(CI)(F)",
+                    "*S-1-5-32-544:(OI)(CI)(F)",
+                    "tunelito:(OI)(CI)(F)",
+                ],
             ),
         ));
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(USER_KEYS, &["*S-1-5-32-544:(F)", "tunelito:(R)"]),
+            &acl_script(
+                USER_KEYS,
+                &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)", "tunelito:(R)"],
+            ),
         ));
     }
     steps.push(ps(
         "acl_request_dir",
-        &acl_script(STATE_DIR, &["*S-1-5-32-545:(OI)(CI)F"]),
+        &acl_script(
+            STATE_DIR,
+            &["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(F)"],
+        ),
     ));
     steps
 }
 
 fn acl_script(path: &str, grants: &[&str]) -> String {
-    let mut args = String::from("'*S-1-5-18:(OI)(CI)F'");
-    for grant in grants {
-        args.push_str(" '");
-        args.push_str(&grant.replace('\'', ""));
-        args.push('\'');
-    }
-    format!(
+    let mut script = format!(
         "$path = '{path}'; \
          if (-not (Test-Path -LiteralPath $path)) {{ throw \"missing $path\" }}; \
          $icacls = Join-Path $env:SystemRoot 'System32\\icacls.exe'; \
          & $icacls $path /inheritance:r; \
-         if ($LASTEXITCODE -ne 0) {{ throw \"icacls inheritance failed on $path\" }}; \
-         & $icacls $path /grant:r {args}; \
-         if ($LASTEXITCODE -ne 0) {{ throw \"icacls grant failed on $path\" }}",
+         if ($LASTEXITCODE -ne 0) {{ throw \"icacls inheritance failed on $path\" }};",
         path = path.replace('\'', ""),
-    )
+    );
+    for grant in grants {
+        let grant = grant.replace('\'', "");
+        script.push_str(&format!(
+            " & $icacls $path /grant:r '{grant}'; \
+             if ($LASTEXITCODE -ne 0) {{ throw \"icacls grant failed on $path\" }};"
+        ));
+    }
+    script
 }
 
 /// Create the Windows profile before any file is written under `C:\Users\tunelito`.
