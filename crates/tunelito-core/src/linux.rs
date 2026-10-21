@@ -13,6 +13,18 @@ pub const POLKIT_ACTION: &str = "io.github.estcarisimo.tunelito.priv";
 /// Written after the first approved setup. Removed by the package's postrm.
 pub const POLKIT_RULE: &str = "/etc/polkit-1/rules.d/49-tunelito.rules";
 
+/// Written only while Tunelito runs an sshd that was off before, so turning
+/// access on does not open SSH to every local account on the network. It sorts
+/// before `00-tunelito.conf`, whose `Match` block would otherwise swallow it.
+pub const ONLY_TUNELITO_DROPIN: &str = "/etc/ssh/sshd_config.d/00-tunelito-only.conf";
+
+pub fn only_tunelito_dropin() -> String {
+    format!(
+        "# Managed by tunelito. Present only while Tunelito runs an sshd that was off.\n\
+         AllowUsers {DEDICATED_USER}\n"
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Packages {
     Apt,
@@ -152,6 +164,21 @@ mod tests {
             assert!(!line.contains("enable"), "{line}");
         }
         assert!(Packages::Unknown.install_openssh().is_err());
+    }
+
+    #[test]
+    fn only_tunelito_dropin_is_global_and_read_first() {
+        let text = only_tunelito_dropin();
+        let directives: Vec<_> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .collect();
+        assert_eq!(directives, ["AllowUsers tunelito"]);
+        let main = crate::plan::managed_paths(OsKind::Linux).dropin;
+        assert!(ONLY_TUNELITO_DROPIN.starts_with("/etc/ssh/sshd_config.d/"));
+        let only = ONLY_TUNELITO_DROPIN.rsplit('/').next().unwrap();
+        let managed = main.rsplit('/').next().unwrap();
+        assert!(only < managed, "{only} must sort before {managed}");
     }
 
     #[test]

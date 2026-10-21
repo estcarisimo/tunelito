@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 use clap::Parser;
 use tunelito_core::access::{write_linux_access_files, write_macos_access_files, AccessRequest};
+use tunelito_core::linux::{only_tunelito_dropin, ONLY_TUNELITO_DROPIN};
 #[cfg(unix)]
 use tunelito_core::linux::{render_polkit_rule, POLKIT_RULE, PRIV_PATH};
 use tunelito_core::plan::{
@@ -134,6 +135,7 @@ fn apply(
     if macos {
         return apply_macos(&request, root, execute);
     }
+    let mut sshd_was_active = true;
     if execute {
         if root != std::path::Path::new("/") {
             return Err(Error::prepare_failed(
@@ -143,6 +145,8 @@ fn apply(
         if !is_root() {
             return Err(Error::needs_admin());
         }
+        // Before any install: Debian's package starts sshd as it installs.
+        sshd_was_active = probe_linux().sshd_active;
         if request.prepare {
             let probe = probe_linux();
             for step in install_commands(&probe)? {
@@ -192,6 +196,13 @@ fn apply(
             run_step(&reload_command(&probe)?)?;
         }
         if request.start_sshd {
+            if !sshd_was_active {
+                fs::write(ONLY_TUNELITO_DROPIN, only_tunelito_dropin())?;
+                // Debian's install may have started sshd already; make it read the file.
+                if probe.sshd_active {
+                    run_step(&reload_command(&probe)?)?;
+                }
+            }
             let mut starting = probe.clone();
             starting.sshd_active = false;
             for step in activate_commands(&starting)? {
@@ -199,9 +210,11 @@ fn apply(
             }
         }
         if request.stop_sshd {
+            // The app asks for this only when Tunelito started sshd.
             for step in disable_commands(&probe, true, true)? {
                 run_step(&step)?;
             }
+            let _ = fs::remove_file(ONLY_TUNELITO_DROPIN);
         }
     }
     Ok(())

@@ -15,6 +15,7 @@ Windows on ARM has no pinned `cloudflared`. Signing secrets are optional; empty 
 - The unit is `ssh` on Debian and Ubuntu, `sshd` elsewhere.
 - The sshd settings go to `/etc/ssh/sshd_config.d/00-tunelito.conf`. Setup refuses when `sshd_config` does not include that directory.
 - On SELinux systems the key file is relabeled with `restorecon`.
+- If sshd was off, Tunelito starts it with `AllowUsers tunelito` in `00-tunelito-only.conf`, so other accounts are not reachable over SSH while access is on. Turning off stops sshd and removes that file. An sshd the owner already runs is left as it is.
 - The `.deb` installs the helper at `/usr/lib/tunelito/tunelito-priv` and a polkit action for it. After the first setup someone approves, the helper writes `/etc/polkit-1/rules.d/49-tunelito.rules`. That rule lets the same desktop user, in an active local session, switch again without a password. Removing the package removes the rule. The AppImage has no installed helper, so it asks every time.
 
 ## macOS
