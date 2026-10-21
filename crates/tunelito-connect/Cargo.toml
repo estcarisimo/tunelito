@@ -1,0 +1,21 @@
+[package]
+name = "tunelito-connect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Helper CLI: share an SSH key, write the tunnel Host block, send hello"
+publish = false
+
+[[bin]]
+name = "tunelito-connect"
+path = "src/main.rs"
+
+[dependencies]
+tunelito-core.workspace = true
+clap.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+ureq.workspace = true

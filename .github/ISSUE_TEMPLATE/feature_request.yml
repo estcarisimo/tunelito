@@ -1,0 +1,24 @@
+name: Feature request
+description: A change to Tunelito
+title: "[feature] "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This does not ask Tunelito to start at boot or to hide who can connect
+          required: true

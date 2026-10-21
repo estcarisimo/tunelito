@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in Tunelito did not behave as documented
+title: "[bug] "
+labels: []
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, and what you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Debian or another Linux
+        - macOS
+        - Windows 10 or 11
+        - Helper CLI only
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tunelito version
+      placeholder: 0.1.0
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The technical disclosure from the window, or the CLI stderr. Remove hostnames and keys before pasting.
+    validations:
+      required: false

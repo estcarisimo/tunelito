@@ -1,0 +1,117 @@
+{
+  "app": {
+    "title": "Tunelito",
+    "subtitle": "Dejá que una persona de confianza llegue a esta computadora por SSH."
+  },
+  "lang": {
+    "en": "English",
+    "es": "Español"
+  },
+  "warning": {
+    "title": "Solo hacé esto con alguien que conocés.",
+    "body": "Encenderlo le da a esa persona control de la cuenta tunelito y de los dispositivos que esa cuenta puede abrir, como un televisor por USB. Alcanza para hacer daño de verdad. Si alguien que no conocés te pide que lo enciendas, decí que no."
+  },
+  "switch": {
+    "on": "Encendido",
+    "off": "Apagado",
+    "starting": "Encendiendo…",
+    "turn_on": "Encender",
+    "turn_off": "Apagar",
+    "confirm_on": "¿Encender el acceso?",
+    "confirm_on_body": "La persona cuya clave agregaste va a poder conectarse hasta que se acabe el tiempo o lo apagues.",
+    "confirm": "Sí, encender",
+    "cancel": "Cancelar",
+    "need_key": "Agregá la clave pública de quien te ayuda antes de encender."
+  },
+  "timer": {
+    "label": "Se apaga solo",
+    "remaining": "Se apaga solo en {time}",
+    "option_30m": "30 minutos",
+    "option_1h": "1 hora",
+    "option_2h": "2 horas",
+    "option_4h": "4 horas",
+    "option_8h": "8 horas",
+    "option_24h": "24 horas"
+  },
+  "connected": {
+    "label": "Alguien está conectado",
+    "yes": "Sí",
+    "no": "No"
+  },
+  "tunnel": {
+    "hostname": "Nombre para enviarle a quien te ayuda",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "waiting": "Abriendo el túnel…",
+    "off_hint": "Encendelo para obtener un nombre que puedas enviar.",
+    "snippet": "Texto para la configuración SSH de quien te ayuda",
+    "snippet_help": "Quien te ayuda puede pegar esto, o ejecutar tunelito-connect con el nombre de arriba.",
+    "copy_snippet": "Copiar configuración SSH"
+  },
+  "keys": {
+    "title": "Claves aceptadas",
+    "help": "Pegá la clave pública que te mandaron, por ejemplo por WhatsApp.",
+    "placeholder": "ssh-ed25519 AAAA… comentario",
+    "add": "Agregar clave",
+    "remove": "Quitar",
+    "empty": "Todavía no hay claves.",
+    "fingerprint": "Huella",
+    "comment": "Comentario",
+    "added": "Agregada",
+    "revoke_on_off": "También olvidar las claves al apagar"
+  },
+  "sessions": {
+    "title": "Conexiones",
+    "empty": "Todavía no hay conexiones.",
+    "active": "Activa",
+    "ended": "Terminó",
+    "user": "Usuario",
+    "started": "Empezó",
+    "ended_at": "Terminó",
+    "observed_peer": "Dirección que ve esta computadora",
+    "loopback_note": "A través del túnel de Cloudflare, esta computadora solo ve 127.0.0.1. La dirección real no se ve desde acá.",
+    "reported_by_client": "Informado por el cliente (sin verificar)",
+    "ip": "IP pública",
+    "asn": "ASN",
+    "rdns": "DNS inverso",
+    "os": "Sistema operativo",
+    "no_hello": "Quien ayuda todavía no envió un hello.",
+    "unmatched_hello": "Llegó un hello que no coincide con una sesión."
+  },
+  "settings": {
+    "title": "Ajustes"
+  },
+  "activity": {
+    "downloading_cloudflared": "Descargando cloudflared…",
+    "starting_sshd": "Preparando SSH…",
+    "starting_tunnel": "Abriendo el túnel…",
+    "ready": "Listo"
+  },
+  "platform": {
+    "linux_note": "Los comandos de servicio de Linux están planeados y cubiertos por pruebas. CI no inicia sshd ni abre un túnel público.",
+    "untested_note": "El control de servicios de Windows y macOS está implementado y no se ejecuta en CI.",
+    "details": "Detalles técnicos"
+  },
+  "errors": {
+    "invalid_public_key": "Eso no parece una clave pública.",
+    "private_key_rejected": "Esa es una clave privada. Pegá solo la clave pública.",
+    "duplicate_key": "Esa clave ya está agregada.",
+    "key_not_found": "Esa clave no está en la lista.",
+    "key_required": "Agregá una clave pública antes de encender.",
+    "checksum_mismatch": "El archivo cloudflared descargado no coincidió con su checksum. No se guardó.",
+    "unsupported_platform": "Este tipo de computadora no está soportado para descargar cloudflared.",
+    "invalid_hostname": "Ese nombre de túnel no parece válido.",
+    "invalid_hello": "No se pudo leer el mensaje hello.",
+    "unsafe_sshd_dropin": "Se rechazó la configuración de SSH.",
+    "needs_admin": "Hace falta la contraseña de administrador para preparar SSH.",
+    "refused_user": "Ese nombre de cuenta no está permitido.",
+    "prepare_failed": "No se pudo preparar SSH.",
+    "download_failed": "No se pudo descargar cloudflared.",
+    "tunnel_exited": "El túnel se detuvo. El acceso está apagado.",
+    "io": "No se pudo leer o escribir un archivo.",
+    "generic": "Algo salió mal."
+  },
+  "dialog": {
+    "close": "Cerrar"
+  }
+}

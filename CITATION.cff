@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: If you use Tunelito, please cite it using this metadata.
+title: Tunelito
+abstract: >-
+  A one-click desktop app that lets a trusted helper SSH into a computer
+  behind NAT, using a Cloudflare quick tunnel and a dedicated unprivileged
+  account.
+authors:
+  - family-names: Carisimo
+    given-names: Esteban
+    email: esteban.carisimo@northwestern.edu
+    affiliation: Northwestern University
+version: 0.1.0
+date-released: 2026-10-20
+license: MIT
+repository-code: https://github.com/estcarisimo/tunelito
+url: https://github.com/estcarisimo/tunelito
+keywords:
+  - ssh
+  - cloudflared
+  - tauri
+  - remote-assistance

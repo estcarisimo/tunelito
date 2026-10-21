@@ -1,0 +1,527 @@
+use crate::cloudflared::OsKind;
+use crate::error::Error;
+use crate::keys::{filter_device_groups, validate_user, DEDICATED_USER};
+use crate::sshd::{dropin_decisions, render_dropin, validate_dropin, SshdEffective};
+
+/// A command the privileged helper may run. Arguments are fixed by the planner.
+/// Windows and macOS steps are never executed in CI; see `executed_in_ci`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandStep {
+    pub os: OsKind,
+    pub program: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub purpose: &'static str,
+    /// Changes a setting that survives reboot. Linux plans keep this false.
+    pub boot_persistent: bool,
+    /// CI on Linux executes none of the service-control commands. The arguments are unit-tested.
+    pub executed_in_ci: bool,
+}
+
+impl CommandStep {
+    fn new(os: OsKind, program: &str, args: Vec<String>, purpose: &'static str) -> Self {
+        Self {
+            os,
+            program: program.into(),
+            args,
+            env: Vec::new(),
+            purpose,
+            boot_persistent: false,
+            executed_in_ci: false,
+        }
+    }
+
+    pub fn line(&self) -> String {
+        format!("{} {}", self.program, self.args.join(" "))
+    }
+
+    pub fn is_forbidden_autostart(&self) -> bool {
+        let line = self.line().to_lowercase();
+        line.contains("systemctl enable")
+            || line.contains("cloudflared service install")
+            || line.contains("startuptype automatic")
+            || line.contains("--startup-type automatic")
+            || (line.contains("set-service") && line.contains("automatic"))
+            || line.contains("launchctl load")
+            || line.contains("autostart")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    pub os: OsKind,
+    pub ssh_unit: String,
+    pub openssh_installed: bool,
+    pub sshd_active: bool,
+    pub sshd_enabled_at_boot: Option<bool>,
+    pub sshd_config_read: bool,
+    pub max_sessions: Option<u32>,
+    pub sftp_enabled: bool,
+    pub user_exists: bool,
+    pub groups_present: Vec<String>,
+    pub remote_login_on: bool,
+    pub windows_capability_installed: bool,
+    pub windows_startup_automatic: bool,
+}
+
+impl Probe {
+    pub fn linux_fresh() -> Self {
+        Self {
+            os: OsKind::Linux,
+            ssh_unit: "ssh".into(),
+            openssh_installed: false,
+            sshd_active: false,
+            sshd_enabled_at_boot: None,
+            sshd_config_read: false,
+            max_sessions: None,
+            sftp_enabled: false,
+            user_exists: false,
+            groups_present: vec!["plugdev".into()],
+            remote_login_on: false,
+            windows_capability_installed: false,
+            windows_startup_automatic: false,
+        }
+    }
+
+    pub fn effective(&self) -> SshdEffective {
+        SshdEffective {
+            max_sessions: self.max_sessions,
+            sftp_enabled: self.sftp_enabled,
+            config_read: self.sshd_config_read,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedPaths {
+    pub authorized_keys: String,
+    pub dropin: String,
+    pub hello_dir: String,
+    pub user_home: String,
+}
+
+pub fn managed_paths(os: OsKind) -> ManagedPaths {
+    match os {
+        OsKind::Linux => ManagedPaths {
+            authorized_keys: "/home/tunelito/.ssh/authorized_keys".into(),
+            dropin: "/etc/ssh/sshd_config.d/00-tunelito.conf".into(),
+            hello_dir: "/var/lib/tunelito/hellos".into(),
+            user_home: "/home/tunelito".into(),
+        },
+        // UNTESTED ON CI: path layout is the documented Apple default, not checked on a Mac.
+        OsKind::Macos => ManagedPaths {
+            authorized_keys: "/Users/tunelito/.ssh/authorized_keys".into(),
+            dropin: "/etc/ssh/sshd_config".into(),
+            hello_dir: "/Library/Application Support/tunelito/hellos".into(),
+            user_home: "/Users/tunelito".into(),
+        },
+        // UNTESTED ON CI: Windows OpenSSH optional-capability paths.
+        OsKind::Windows => ManagedPaths {
+            authorized_keys: r"C:\Users\tunelito\.ssh\authorized_keys".into(),
+            dropin: r"C:\ProgramData\ssh\sshd_config".into(),
+            hello_dir: r"C:\ProgramData\tunelito\hellos".into(),
+            user_home: r"C:\Users\tunelito".into(),
+        },
+    }
+}
+
+pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
+    validate_unit(&probe.ssh_unit)?;
+    let mut steps = Vec::new();
+    match probe.os {
+        OsKind::Linux => {
+            if !probe.openssh_installed {
+                let mut install = CommandStep::new(
+                    OsKind::Linux,
+                    "apt-get",
+                    strs(&["install", "-y", "openssh-server"]),
+                    "install_openssh",
+                );
+                install
+                    .env
+                    .push(("DEBIAN_FRONTEND".into(), "noninteractive".into()));
+                steps.push(install);
+                // The Debian package enables ssh at boot. Undo that; Tunelito starts it on demand.
+                steps.push(CommandStep::new(
+                    OsKind::Linux,
+                    "systemctl",
+                    vec!["disable".into(), probe.ssh_unit.clone()],
+                    "prevent_boot_autostart",
+                ));
+            }
+            if !probe.user_exists {
+                steps.push(CommandStep::new(
+                    OsKind::Linux,
+                    "useradd",
+                    strs(&[
+                        "--create-home",
+                        "--shell",
+                        "/bin/bash",
+                        "--comment",
+                        "Tunelito remote helper",
+                        "--user-group",
+                        DEDICATED_USER,
+                    ]),
+                    "create_dedicated_user",
+                ));
+            }
+            let groups = filter_device_groups(probe.groups_present.iter().map(String::as_str));
+            if !groups.is_empty() {
+                steps.push(CommandStep::new(
+                    OsKind::Linux,
+                    "usermod",
+                    vec!["-aG".into(), groups.join(","), DEDICATED_USER.to_string()],
+                    "device_groups",
+                ));
+            }
+        }
+        OsKind::Macos => {
+            // UNTESTED ON CI: macOS execution.
+            if !probe.remote_login_on {
+                let mut persistent = CommandStep::new(
+                    OsKind::Macos,
+                    "systemsetup",
+                    strs(&["-setremotelogin", "on"]),
+                    "enable_remote_login",
+                );
+                persistent.boot_persistent = true;
+                steps.push(persistent);
+            }
+            if !probe.user_exists {
+                steps.push(CommandStep::new(
+                    OsKind::Macos,
+                    "sysadminctl",
+                    strs(&[
+                        "-addUser",
+                        DEDICATED_USER,
+                        "-fullName",
+                        "Tunelito",
+                        "-shell",
+                        "/bin/zsh",
+                        "-password",
+                        "-",
+                    ]),
+                    "create_dedicated_user",
+                ));
+            }
+        }
+        OsKind::Windows => {
+            // UNTESTED ON CI: Windows execution.
+            if !probe.windows_capability_installed {
+                steps.push(CommandStep::new(
+                    OsKind::Windows,
+                    "powershell",
+                    strs(&[
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0",
+                    ]),
+                    "install_openssh",
+                ));
+                steps.push(CommandStep::new(
+                    OsKind::Windows,
+                    "powershell",
+                    strs(&[
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        "Set-Service -Name sshd -StartupType Manual",
+                    ]),
+                    "prevent_boot_autostart",
+                ));
+            }
+            if !probe.user_exists {
+                steps.push(CommandStep::new(
+                    OsKind::Windows,
+                    "powershell",
+                    strs(&[
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        "New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -NoPassword -UserMayNotChangePassword -AccountNeverExpires; Enable-LocalUser -Name 'tunelito'",
+                    ]),
+                    "create_dedicated_user",
+                ));
+            }
+        }
+    }
+    Ok(steps)
+}
+
+pub fn activate_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
+    validate_unit(&probe.ssh_unit)?;
+    let mut steps = Vec::new();
+    match probe.os {
+        OsKind::Linux => {
+            if !probe.sshd_active {
+                steps.push(CommandStep::new(
+                    OsKind::Linux,
+                    "systemctl",
+                    vec!["start".into(), probe.ssh_unit.clone()],
+                    "start_sshd",
+                ));
+            }
+        }
+        OsKind::Macos => {
+            steps.push(CommandStep::new(
+                OsKind::Macos,
+                "launchctl",
+                strs(&["kickstart", "-k", "system/com.openssh.sshd"]),
+                "start_sshd",
+            ));
+        }
+        OsKind::Windows => {
+            steps.push(CommandStep::new(
+                OsKind::Windows,
+                "powershell",
+                strs(&[
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Start-Service sshd",
+                ]),
+                "start_sshd",
+            ));
+        }
+    }
+    Ok(steps)
+}
+
+pub fn reload_command(probe: &Probe) -> Result<CommandStep, Error> {
+    validate_unit(&probe.ssh_unit)?;
+    Ok(match probe.os {
+        OsKind::Linux => CommandStep::new(
+            OsKind::Linux,
+            "systemctl",
+            vec!["reload".into(), probe.ssh_unit.clone()],
+            "reload_sshd",
+        ),
+        OsKind::Macos => CommandStep::new(
+            OsKind::Macos,
+            "launchctl",
+            strs(&["kickstart", "-k", "system/com.openssh.sshd"]),
+            "reload_sshd",
+        ),
+        OsKind::Windows => CommandStep::new(
+            OsKind::Windows,
+            "powershell",
+            strs(&[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Restart-Service sshd",
+            ]),
+            "reload_sshd",
+        ),
+    })
+}
+
+pub fn disable_commands(
+    probe: &Probe,
+    started_by_us: bool,
+    stop_if_started: bool,
+) -> Result<Vec<CommandStep>, Error> {
+    validate_unit(&probe.ssh_unit)?;
+    let mut steps = Vec::new();
+    if started_by_us && stop_if_started {
+        match probe.os {
+            OsKind::Linux => steps.push(CommandStep::new(
+                OsKind::Linux,
+                "systemctl",
+                vec!["stop".into(), probe.ssh_unit.clone()],
+                "stop_sshd",
+            )),
+            OsKind::Macos => steps.push(CommandStep::new(
+                OsKind::Macos,
+                "launchctl",
+                strs(&["kill", "SIGTERM", "system/com.openssh.sshd"]),
+                "stop_sshd",
+            )),
+            OsKind::Windows => steps.push(CommandStep::new(
+                OsKind::Windows,
+                "powershell",
+                strs(&[
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Stop-Service sshd",
+                ]),
+                "stop_sshd",
+            )),
+        }
+    }
+    // If we were the ones who turned Remote Login on, turn it back off.
+    if probe.os == OsKind::Macos && started_by_us && !probe.remote_login_on {
+        let mut step = CommandStep::new(
+            OsKind::Macos,
+            "systemsetup",
+            strs(&["-setremotelogin", "off"]),
+            "disable_remote_login",
+        );
+        step.boot_persistent = true;
+        steps.push(step);
+    }
+    Ok(steps)
+}
+
+pub fn planned_dropin(probe: &Probe) -> Result<Option<String>, Error> {
+    if probe.os != OsKind::Linux && probe.os != OsKind::Macos && probe.os != OsKind::Windows {
+        return Ok(None);
+    }
+    let (global, sftp) = dropin_decisions(&probe.effective(), probe.openssh_installed);
+    let text = render_dropin(global, sftp);
+    validate_dropin(&text)?;
+    Ok(Some(text))
+}
+
+pub fn validate_unit(unit: &str) -> Result<(), Error> {
+    if unit == "ssh" || unit == "sshd" {
+        Ok(())
+    } else {
+        Err(Error::prepare_failed("ssh unit must be ssh or sshd"))
+    }
+}
+
+pub fn coverage_note(os: OsKind) -> &'static str {
+    match os {
+        OsKind::Linux => {
+            "Linux command arguments are unit-tested. CI does not install packages, create users, or start sshd."
+        }
+        OsKind::Macos => {
+            "UNTESTED ON CI: macOS Remote Login, sysadminctl, and launchctl are not executed here."
+        }
+        OsKind::Windows => {
+            "UNTESTED ON CI: Windows OpenSSH capability, service control, and local-user creation are not executed here."
+        }
+    }
+}
+
+pub fn assert_user_constant() -> Result<(), Error> {
+    validate_user(DEDICATED_USER)
+}
+
+fn strs(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_no_autostart(steps: &[CommandStep]) {
+        for step in steps {
+            assert!(!step.is_forbidden_autostart(), "{}", step.line());
+            assert!(!step.executed_in_ci);
+        }
+    }
+
+    #[test]
+    fn linux_fresh_install_does_not_enable_sshd_at_boot() {
+        let probe = Probe::linux_fresh();
+        let steps = install_commands(&probe).unwrap();
+        assert_no_autostart(&steps);
+        assert!(steps.iter().any(|s| s.purpose == "install_openssh"));
+        assert!(steps.iter().any(|s| s.purpose == "prevent_boot_autostart"));
+        assert!(steps
+            .iter()
+            .any(|s| s.line().contains("systemctl disable ssh")));
+        assert!(steps.iter().all(|s| !s.boot_persistent));
+        assert!(steps
+            .iter()
+            .all(|s| !s.line().to_lowercase().contains("sudo")));
+        let groups = steps.iter().find(|s| s.purpose == "device_groups").unwrap();
+        assert!(groups.line().contains("plugdev"));
+        assert!(!groups.line().contains("sudo"));
+        assert!(!groups.line().contains("input"));
+    }
+
+    #[test]
+    fn linux_already_enabled_is_left_alone() {
+        let mut probe = Probe::linux_fresh();
+        probe.openssh_installed = true;
+        probe.sshd_enabled_at_boot = Some(true);
+        probe.sshd_active = true;
+        probe.user_exists = true;
+        probe.groups_present.clear();
+        let steps = install_commands(&probe).unwrap();
+        assert!(steps.is_empty());
+        assert!(activate_commands(&probe).unwrap().is_empty());
+    }
+
+    #[test]
+    fn poisoned_groups_are_dropped() {
+        let mut probe = Probe::linux_fresh();
+        probe.user_exists = true;
+        probe.openssh_installed = true;
+        probe.groups_present = vec![
+            "sudo".into(),
+            "input".into(),
+            "wheel".into(),
+            "plugdev".into(),
+        ];
+        let steps = install_commands(&probe).unwrap();
+        let line = steps
+            .iter()
+            .find(|s| s.purpose == "device_groups")
+            .unwrap()
+            .line();
+        assert_eq!(line, "usermod -aG plugdev tunelito");
+    }
+
+    #[test]
+    fn windows_install_sets_manual_startup_and_skips_administrators() {
+        let mut probe = Probe::linux_fresh();
+        probe.os = OsKind::Windows;
+        let steps = install_commands(&probe).unwrap();
+        assert_no_autostart(&steps);
+        let blob = steps
+            .iter()
+            .map(|s| s.line())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(blob.contains("OpenSSH.Server~~~~0.0.1.0"));
+        assert!(blob.contains("StartupType Manual"));
+        assert!(blob.contains("New-LocalUser"));
+        assert!(!blob.to_lowercase().contains("administrators"));
+        assert!(!blob.to_lowercase().contains("automatic"));
+        assert!(steps
+            .iter()
+            .all(|s| coverage_note(s.os).contains("UNTESTED ON CI")));
+    }
+
+    #[test]
+    fn macos_remote_login_is_undone_when_we_enabled_it() {
+        let mut probe = Probe::linux_fresh();
+        probe.os = OsKind::Macos;
+        probe.remote_login_on = false;
+        let enable = install_commands(&probe).unwrap();
+        assert!(enable
+            .iter()
+            .any(|s| s.boot_persistent && s.purpose == "enable_remote_login"));
+        assert_no_autostart(&enable);
+        let disable = disable_commands(&probe, true, true).unwrap();
+        assert!(disable.iter().any(|s| s.purpose == "disable_remote_login"));
+        assert!(disable.iter().any(|s| s.purpose == "stop_sshd"));
+        assert!(coverage_note(OsKind::Macos).contains("UNTESTED ON CI"));
+    }
+
+    #[test]
+    fn dropin_for_a_low_maxsessions_validates() {
+        let mut probe = Probe::linux_fresh();
+        probe.openssh_installed = true;
+        probe.sshd_config_read = true;
+        probe.max_sessions = Some(4);
+        probe.sftp_enabled = true;
+        let dropin = planned_dropin(&probe).unwrap().unwrap();
+        assert!(dropin.contains("MaxSessions 10"));
+        validate_dropin(&dropin).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_weird_unit_name() {
+        let mut probe = Probe::linux_fresh();
+        probe.ssh_unit = "ssh;rm".into();
+        assert!(install_commands(&probe).is_err());
+    }
+}
