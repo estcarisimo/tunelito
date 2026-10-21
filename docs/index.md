@@ -1,25 +1,27 @@
 # Tunelito
 
-Tunelito is a window on **this** computer. You turn it on so someone you already know can SSH in through NAT, then open a Claude Desktop SSH session or use a local device, such as a TV over USB.
+Tunelito lets you connect to the computer of someone you want to help — a friend, your mom, your brother, your cousin, your partner — and fix it or work on it.
 
-It is for a friend helping a friend. If a stranger asks you to install it, say no.
+They don't need to know how any of this works. The computer sits behind NAT or CGNAT, so port forwarding isn't an option.
 
-![Tunelito in English, access on, someone connected](images/tunelito-en.png)
+They download one file, open it, and paste the key you sent (WhatsApp is fine). The window shows an address. You connect with SSH.
 
-The picture is the real window with sample data. It is not a live tunnel.
+Claude Code over SSH, and USB devices, are one way to use that session.
 
-## What you do
+**Only with someone you know.** If a stranger asks them to paste a key, the answer is no.
 
-1. The helper installs `cloudflared`, and sends you a public key (`ssh-keygen`, or the optional `tunelito-connect`).
-2. You paste that key, turn the switch on, and send back the SSH config block the window copies.
-3. The helper pastes that block into `~/.ssh/config` and runs `ssh the-name.trycloudflare.com`, or adds that name in Claude Desktop.
+![Tunelito](images/tunelito-en.png)
 
-The block uses ordinary OpenSSH: `User tunelito` and `ProxyCommand cloudflared access ssh --hostname %h`. No extra client is required to connect.
+## On their computer
 
-## Read next
+1. Download `tunelito.exe`, drag the app out of the `.dmg`, or install the `.deb` / AppImage.
+2. Open it. Accept the one administrator prompt.
+3. Paste the key. Press the button. Copy or share the address.
 
-- [Install on this computer](install.md) covers Debian, Windows, and macOS.
-- [Connect with SSH](connect.md) is the helper's path, including Claude Desktop.
-- [Security](security.md) is the threat model: who can do harm, and what the switch does about it.
+## On yours
 
-The switch turns itself off. Nothing in Tunelito starts at boot.
+Install `cloudflared`. Send only a public key (`ssh-keygen -t ed25519`). Then [connect with SSH](connect.md).
+
+It turns itself off. Nothing starts at boot.
+
+More: [Install](install.md) · [Security](security.md) · [FAQ](faq.md)

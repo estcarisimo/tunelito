@@ -13,7 +13,7 @@ pub struct SshHostEntry {
 }
 
 impl SshHostEntry {
-    /// The block the host window copies. Plain OpenSSH: no hello hook.
+    /// The block the host copies. Plain OpenSSH, no hello hook.
     /// `tunelito-connect install` turns the hook on when the helper wants it.
     pub fn for_host(hostname: impl Into<String>) -> Self {
         Self {

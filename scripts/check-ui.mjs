@@ -51,25 +51,27 @@ try {
 
   await go(page, `${BASE}?lang=en`);
   let text = await bodyText(page);
-  check("english warning", text.includes("Only do this with someone you know."), text.slice(0, 180));
-  check("off switch", text.includes("Off"), text);
+  check("english warning", text.includes("Only do this with someone you know."), text.slice(0, 240));
+  check("paste label", text.includes("Paste the key they sent you"), text.slice(0, 240));
+  check("one button", text.includes("Turn on"), text.slice(0, 240));
 
   await click(page, "button", "Español");
   await sleep(200);
   text = await bodyText(page);
   check("spanish warning", text.includes("Solo hacé esto con alguien que conocés."), text.slice(0, 240));
+  check("spanish paste", text.includes("Pegá la clave que te mandaron"), text.slice(0, 240));
 
   await click(page, "button", "English");
   await sleep(200);
 
   await setField(page, "[data-testid='key-input']", "-----BEGIN OPENSSH PRIVATE KEY-----\nabc");
-  await clickTestId(page, "add-key");
+  await clickTestId(page, "power");
   await sleep(150);
   text = await bodyText(page);
   check("rejects private key", text.includes("That is a private key"), text.slice(0, 400));
 
   await setField(page, "[data-testid='key-input']", "hello this is not a key");
-  await clickTestId(page, "add-key");
+  await clickTestId(page, "power");
   await sleep(150);
   text = await bodyText(page);
   check("rejects junk", text.includes("does not look like a public key"), text.slice(0, 400));
@@ -77,21 +79,16 @@ try {
   const sample =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH3R0+ef4Nv1ZvLTNm8jM4evFM5YW6JBNbxGC1BtP6K9 helper@laptop";
   await setField(page, "[data-testid='key-input']", sample);
-  await clickTestId(page, "add-key");
-  await sleep(150);
-  text = await bodyText(page);
-  check("adds key", text.includes("SHA256:UcC9dBHY9VaM1Pe2xCc0UH/tSRTEtGbGWnIOkEuAKJw"), text.slice(0, 500));
-  check("shows comment", text.includes("helper@laptop"), "missing comment");
-
   await clickTestId(page, "power");
   await sleep(150);
   text = await bodyText(page);
-  check("confirm dialog", text.includes("Turn on access?"), text.slice(0, 500));
+  check("confirm dialog", text.includes("Turn it on?"), text.slice(0, 500));
+  check("confirm is one line", text.includes("This gives them a shell on this computer."), text.slice(0, 500));
 
   await clickTestId(page, "cancel-on");
   await sleep(100);
   text = await bodyText(page);
-  check("cancel closes dialog", !text.includes("Turn on access?"), "dialog still open");
+  check("cancel closes dialog", !text.includes("Turn it on?"), "dialog still open");
 
   await clickTestId(page, "power");
   await sleep(100);
@@ -99,10 +96,13 @@ try {
   await sleep(200);
   text = await bodyText(page);
   check("hostname after on", text.includes("maple-river-42.trycloudflare.com"), text.slice(0, 700));
-  check("someone connected no", text.includes("Someone is connected: No"), text.slice(0, 700));
+  check("copy and share", text.includes("Copy") && text.includes("Share"), text.slice(0, 700));
+  await openDetails(page);
+  text = await bodyText(page);
+  check("shows comment", text.includes("helper@laptop"), text.slice(0, 800));
+  check("someone connected no", text.includes("Someone is connected: No"), text.slice(0, 800));
   check("snippet", text.includes("ProxyCommand cloudflared access ssh --hostname %h"), "missing snippet");
-  check("plain ssh user", text.includes("User tunelito"), "missing user");
-  check("no hello hook in snippet", !text.includes("LocalCommand"), text);
+  check("plain ssh snippet", !text.includes("LocalCommand"), "hello hook leaked into the snippet");
 
   await clickTestId(page, "copy-host");
   await sleep(100);
@@ -111,21 +111,26 @@ try {
 
   await go(page, `${BASE}?preview=connected&lang=en`);
   text = await bodyText(page);
-  check("connected sample", text.includes("Someone is connected: Yes"), text.slice(0, 400));
+  check("connected url", text.includes("maple-river-42.trycloudflare.com"), text.slice(0, 400));
+  await shot(page, new URL("tunelito-en.png", OUT), 1280);
+  await openDetails(page);
+  text = await bodyText(page);
+  check("connected sample", text.includes("Someone is connected: Yes"), text.slice(0, 500));
   check("unverified label", text.includes("Reported by the client (unverified)"), text);
+  check("no client info", text.includes("No client info."), text);
   check("loopback note", text.includes("127.0.0.1"), text);
   check("green and gray", (await count(page, ".dot.live")) >= 2 && (await count(page, ".dot:not(.live)")) >= 1, "dots");
   check("active and ended", text.includes("Active") && text.includes("Ended"), text);
-  check("no client info", text.includes("No client info."), text);
-  check("fingerprint without hello", (await count(page, "[data-testid='no-client-info']")) >= 1, "missing no-client-info row");
-  await shot(page, new URL("tunelito-en.png", OUT), 1280);
 
   await go(page, `${BASE}?preview=connected&lang=es`);
   text = await bodyText(page);
-  check("spanish connected", text.includes("Alguien está conectado: Sí"), text.slice(0, 400));
+  check("spanish paste on", text.includes("maple-river-42.trycloudflare.com"), text.slice(0, 300));
+  await shot(page, new URL("tunelito-es.png", OUT), 1280);
+  await openDetails(page);
+  text = await bodyText(page);
+  check("spanish connected", text.includes("Alguien está conectado: Sí"), text.slice(0, 500));
   check("spanish unverified", text.includes("Informado por el cliente (sin verificar)"), text);
   check("spanish no client info", text.includes("Sin datos del cliente."), text);
-  await shot(page, new URL("tunelito-es.png", OUT), 1280);
 
   await page.send("Emulation.setDeviceMetricsOverride", {
     width: 390,
@@ -186,6 +191,11 @@ async function go(page, url) {
 
 async function bodyText(page) {
   return evalValue(page, "document.body.innerText");
+}
+
+async function openDetails(page) {
+  await evalValue(page, "document.querySelector('[data-testid=more]').open = true");
+  await sleep(50);
 }
 
 async function evalValue(page, expression) {

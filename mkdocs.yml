@@ -3,7 +3,7 @@
 # This repository is Rust, so the pins live in docs/requirements.txt rather than a uv group.
 # Build with: .docs-venv/bin/mkdocs build --strict
 site_name: Tunelito
-site_description: Let someone you trust SSH into this computer through NAT
+site_description: Reach the computer of someone you want to help, through NAT or CGNAT
 site_url: https://estcarisimo.github.io/tunelito/
 repo_url: https://github.com/estcarisimo/tunelito
 repo_name: estcarisimo/tunelito
@@ -66,7 +66,7 @@ plugins:
         - locale: es
           name: Español
           build: true
-          site_description: Dejá que una persona de confianza entre por SSH a esta computadora, a través de NAT
+          site_description: Llegá a la computadora de alguien a quien querés ayudar, a través de NAT o CGNAT
           nav_translations:
             Home: Inicio
             Install on this computer: Instalar en esta computadora
@@ -79,6 +79,7 @@ exclude_docs: |
   THREAT_MODEL.md
   CLAUDE_DESKTOP.md
   PLATFORM_SUPPORT.md
+  SIGNING.md
 
 validation:
   omitted_files: warn

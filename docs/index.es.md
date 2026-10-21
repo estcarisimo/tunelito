@@ -1,27 +1,27 @@
 # Tunelito
 
-Tunelito es una ventana en **esta** computadora. La encendés para que una persona que ya conocés pueda entrar por SSH a través de NAT, y después abrir una sesión SSH de Claude Desktop o usar un dispositivo local, como un televisor por USB.
+Tunelito te deja entrar a la computadora de alguien a quien querés ayudar — un amigo, tu mamá, tu hermano, tu primo, tu pareja — para arreglarla o trabajar en ella.
 
-Es para que un amigo ayude a un amigo. Si alguien que no conocés te pide que lo instales, decí que no.
+Esa persona no tiene que saber cómo funciona nada de esto. La computadora está detrás de NAT o CGNAT, así que abrir puertos no es una opción.
 
-![Tunelito en español, con el acceso encendido y alguien conectado](images/tunelito-es.png)
+Baja un archivo, lo abre, y pega la clave que le mandaste (por WhatsApp alcanza). La ventana muestra una dirección. Te conectás por SSH.
 
-La imagen es la ventana real con datos de ejemplo. No es un túnel en vivo.
+Claude Code por SSH, y los dispositivos USB, son una forma de usar esa sesión.
 
-## Qué hacen
+**Solo con alguien que conocés.** Si un desconocido le pide que pegue una clave, la respuesta es no.
 
-1. Quien ayuda instala `cloudflared` y te manda una clave pública (`ssh-keygen`, o el programa opcional `tunelito-connect`).
-2. Pegás esa clave, encendés el interruptor, y devolvés el bloque de configuración SSH que copia la ventana.
-3. Quien ayuda pega ese bloque en `~/.ssh/config` y corre `ssh el-nombre.trycloudflare.com`, o agrega ese nombre en Claude Desktop.
+![Tunelito](images/tunelito-es.png)
 
-El bloque es OpenSSH común: `User tunelito` y `ProxyCommand cloudflared access ssh --hostname %h`. Para conectarse no hace falta otro programa.
+## En la computadora de esa persona
 
-## Seguí por acá
+1. Bajá `tunelito.exe`, arrastrá la app desde el `.dmg`, o instalá el `.deb` / AppImage.
+2. Abrilo. Aceptá el único pedido de administrador.
+3. Pegá la clave. Tocá el botón. Copiá o compartí la dirección.
 
-- [Instalar en esta computadora](install.md) cubre Debian, Windows y macOS.
-- [Conectarse por SSH](connect.md) es el camino de quien ayuda, incluyendo Claude Desktop.
-- [Seguridad](security.md) es el modelo de amenazas: quién puede hacer daño, y qué hace el interruptor al respecto.
+## En la tuya
 
-El interruptor se apaga solo. Nada de Tunelito arranca al iniciar el equipo.
+Instalá `cloudflared`. Mandá solo una clave pública (`ssh-keygen -t ed25519`). Después [conectate por SSH](connect.md).
 
-El español de estas páginas es rioplatense, igual que la ventana.
+Se apaga solo. Nada arranca al iniciar el equipo.
+
+Más: [Instalar](install.md) · [Seguridad](security.md) · [Preguntas](faq.md)
