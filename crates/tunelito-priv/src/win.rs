@@ -129,7 +129,7 @@ fn probe_windows() -> Probe {
         ps_true("[bool](Get-Service -Name sshd -ErrorAction SilentlyContinue)");
     probe.windows_capability_installed = probe.openssh_installed;
     probe.user_exists = ps_true(
-        "try { $u = [ADSI]'WinNT://./tunelito,user'; [void]$u.Name; 'True' } catch { 'False' }",
+        "$net = Join-Path $env:SystemRoot 'System32\\net.exe'; & $net user tunelito > $null 2>&1; if ($LASTEXITCODE -eq 0) { 'True' } else { 'False' }",
     );
     probe.sshd_active =
         ps_true("(Get-Service -Name sshd -ErrorAction SilentlyContinue).Status -eq 'Running'");

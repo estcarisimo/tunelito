@@ -231,13 +231,12 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
                     "Set-Service -Name sshd -StartupType Manual",
                 ));
             }
-            if !probe.user_exists {
-                // A blank password is refused for network logon, including public-key SSH.
-                steps.push(windows_ps(
-                    "create_dedicated_user",
-                    "$alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'.ToCharArray(); $bytes = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $plain = -join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] }); if ($plain.Length -lt 20) { throw 'password was not generated' }; $net = Join-Path $env:SystemRoot 'System32\\net.exe'; $log = Join-Path $env:TEMP 'tunelito-net-user.txt'; & $net user tunelito $plain /add > $log 2>&1; $code = $LASTEXITCODE; $add = [string](Get-Content -Path $log -Raw -ErrorAction SilentlyContinue); if ($code -ne 0) { throw \"net user /add failed ($code): $add\" }; & $net user > $log 2>&1; $list = [string](Get-Content -Path $log -Raw -ErrorAction SilentlyContinue); if ($list -notmatch '\\btunelito\\b') { throw \"tunelito not listed: $add ;; $list\" }; & $net user tunelito /active:yes > $log 2>&1; if ($LASTEXITCODE -ne 0) { throw \"net user /active failed ($LASTEXITCODE)\" }; $user = [ADSI]'WinNT://./tunelito,user'; $flags = [int]$user.Get('UserFlags'); $user.Put('UserFlags', ($flags -bor 65536)); $user.SetInfo()",
-                ));
-            }
+            // A blank password is refused for network logon, including public-key SSH.
+            // Always ensure the account: an ADSI existence check reports a missing user as present.
+            steps.push(windows_ps(
+                "create_dedicated_user",
+                "$net = Join-Path $env:SystemRoot 'System32\\net.exe'; $log = Join-Path $env:TEMP 'tunelito-net-user.txt'; & $net user tunelito > $log 2>&1; if ($LASTEXITCODE -ne 0) { $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'.ToCharArray(); $bytes = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $plain = -join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] }); if ($plain.Length -lt 20) { throw 'password was not generated' }; & $net user tunelito $plain /add > $log 2>&1; $code = $LASTEXITCODE; $add = [string](Get-Content -Path $log -Raw -ErrorAction SilentlyContinue); if ($code -ne 0) { throw \"net user /add failed ($code): $add\" } }; & $net user tunelito /active:yes > $log 2>&1; if ($LASTEXITCODE -ne 0) { $listed = [string](Get-Content -Path $log -Raw -ErrorAction SilentlyContinue); throw \"tunelito is not an active account: $listed\" }; $user = [ADSI]'WinNT://./tunelito,user'; $flags = [int]$user.Get('UserFlags'); $user.Put('UserFlags', ($flags -bor 65536)); $user.SetInfo()",
+            ));
             steps.push(crate::windows::create_profile_command());
         }
     }
