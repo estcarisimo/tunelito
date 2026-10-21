@@ -71,7 +71,7 @@ jobs:
           prerelease: false
           args: --bundles ${{ matrix.bundles }}
       - name: Upload helper binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helpers-${{ matrix.os }}
           path: |
