@@ -51,8 +51,13 @@ try {
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
         throw 'OpenSSH client (ssh) is not on PATH'
     }
-    & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -i $key -p 22 tunelito@127.0.0.1 echo tunelito-ok
-    if ($LASTEXITCODE -ne 0) { throw "localhost ssh failed: $LASTEXITCODE" }
+    $sshOut = & ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -i $key -p 22 tunelito@127.0.0.1 echo tunelito-ok 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $sshOut
+        $sshdLog = 'C:\ProgramData\ssh\logs\sshd.log'
+        if (Test-Path $sshdLog) { Get-Content $sshdLog -Tail 40 | ForEach-Object { Write-Host $_ } }
+        throw "localhost ssh failed: $LASTEXITCODE"
+    }
     Write-Host 'verified: OpenSSH capability, tunelito user, sshd, localhost pubkey login'
 
     if ($Tunnel) {

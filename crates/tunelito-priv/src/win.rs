@@ -52,7 +52,7 @@ pub fn execute(request: &AccessRequest) -> Result<(), Error> {
         }
         write_windows_access_files(Path::new(r"C:\"), &plan)?;
         for step in acl_commands(plan.account_is_admin) {
-            let _ = super::run_step(&step);
+            super::run_step(&step)?;
         }
     }
     if request.reload_sshd {

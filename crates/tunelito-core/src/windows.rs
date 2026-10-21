@@ -17,6 +17,7 @@ pub const MARKER_END: &str = "# END tunelito";
 
 pub const SSHD_CONFIG: &str = r"C:\ProgramData\ssh\sshd_config";
 pub const ADMIN_KEYS: &str = r"C:\ProgramData\ssh\administrators_authorized_keys";
+pub const USER_HOME: &str = r"C:\Users\tunelito";
 pub const USER_KEYS: &str = r"C:\Users\tunelito\.ssh\authorized_keys";
 pub const USER_SSH_DIR: &str = r"C:\Users\tunelito\.ssh";
 pub const HELLO_DIR: &str = r"C:\ProgramData\tunelito\hellos";
@@ -263,6 +264,7 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
             &acl_script(ADMIN_KEYS, true, false),
         ));
     } else {
+        steps.push(ps("acl_profile", &acl_script(USER_HOME, false, true)));
         steps.push(ps("acl_ssh_dir", &acl_script(USER_SSH_DIR, false, true)));
         steps.push(ps(
             "acl_authorized_keys",
@@ -308,6 +310,16 @@ fn acl_script(path: &str, administrators: bool, directory: bool) -> String {
         rights = rights,
         principal = principal,
         dir = if directory { "$true" } else { "$false" },
+    )
+}
+
+/// Create the Windows profile before any file is written under `C:\Users\tunelito`.
+/// A plain directory there makes Windows put the real profile somewhere else,
+/// and sshd then ignores the key file.
+pub fn create_profile_command() -> CommandStep {
+    ps(
+        "create_user_profile",
+        r#"$sid = (New-Object System.Security.Principal.NTAccount('tunelito')).Translate([System.Security.Principal.SecurityIdentifier]).Value; $key = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"; if (Test-Path -LiteralPath $key) { exit 0 }; if (-not ('Win32.UserEnv' -as [type])) { Add-Type -Namespace Win32 -Name UserEnv -MemberDefinition '[DllImport("userenv.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int CreateProfile(string pszUserSid, string pszUserName, System.Text.StringBuilder pszProfilePath, uint cchProfilePath);' }; $buf = New-Object System.Text.StringBuilder 260; $code = [Win32.UserEnv]::CreateProfile($sid, 'tunelito', $buf, [uint32]$buf.Capacity); if ($code -ne 0 -and $code -ne -2147024713) { throw "CreateProfile failed: $code" }"#,
     )
 }
 

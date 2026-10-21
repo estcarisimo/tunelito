@@ -229,11 +229,13 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
                 ));
             }
             if !probe.user_exists {
+                // A blank password is refused for network logon, including public-key SSH.
                 steps.push(windows_ps(
                     "create_dedicated_user",
-                    "New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -NoPassword -UserMayNotChangePassword -AccountNeverExpires; Enable-LocalUser -Name 'tunelito'",
+                    "$bytes = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $sec = ConvertTo-SecureString ([Convert]::ToBase64String($bytes)) -AsPlainText -Force; New-LocalUser -Name 'tunelito' -Description 'Tunelito remote helper' -Password $sec -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires; Enable-LocalUser -Name 'tunelito'",
                 ));
             }
+            steps.push(crate::windows::create_profile_command());
         }
     }
     Ok(steps)
@@ -461,6 +463,8 @@ mod tests {
         assert!(blob.contains("OpenSSH.Server~~~~0.0.1.0"));
         assert!(blob.contains("StartupType Manual"));
         assert!(blob.contains("New-LocalUser"));
+        assert!(blob.contains("CreateProfile"));
+        assert!(!blob.contains("-NoPassword"));
         assert!(blob.contains("Remove-NetFirewallRule"));
         assert!(!blob.to_lowercase().contains("administrators"));
         assert!(!blob.to_lowercase().contains("automatic"));
