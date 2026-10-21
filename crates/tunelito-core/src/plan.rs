@@ -397,7 +397,7 @@ pub(crate) fn powershell_step(purpose: &'static str, script: &str) -> CommandSte
     step
 }
 
-pub(crate) fn encode_powershell_command(script: &str) -> String {
+pub fn encode_powershell_command(script: &str) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes: Vec<u8> = script
         .encode_utf16()
