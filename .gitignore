@@ -20,3 +20,5 @@ site/
 *.pfx
 .env
 .env.*
+site/
+.docs-venv/

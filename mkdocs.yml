@@ -1,0 +1,90 @@
+# Documentation site, published to GitHub Pages by .github/workflows/pages.yml.
+# Same MkDocs Material setup as estcarisimo/jitterbug and estcarisimo/smoking-pi.
+# This repository is Rust, so the pins live in docs/requirements.txt rather than a uv group.
+# Build with: .docs-venv/bin/mkdocs build --strict
+site_name: Tunelito
+site_description: Reach the computer of someone you want to help, through NAT or CGNAT
+site_url: https://estcarisimo.github.io/tunelito/
+repo_url: https://github.com/estcarisimo/tunelito
+repo_name: estcarisimo/tunelito
+edit_uri: edit/main/docs/
+copyright: MIT License. Esteban Carisimo.
+
+theme:
+  name: material
+  language: en
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - For the person at the computer: guia.md
+  - Install on this computer: install.md
+  - Connect with SSH: connect.md
+  - Security: security.md
+  - FAQ: faq.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: es
+          name: Español
+          build: true
+          site_description: Llegá a la computadora de alguien a quien querés ayudar, a través de NAT o CGNAT
+          nav_translations:
+            Home: Inicio
+            For the person at the computer: Para vos
+            Install on this computer: Instalar en esta computadora
+            Connect with SSH: Conectarse por SSH
+            Security: Seguridad
+            FAQ: Preguntas frecuentes
+
+exclude_docs: |
+  requirements.txt
+  THREAT_MODEL.md
+  CLAUDE_DESKTOP.md
+  PLATFORM_SUPPORT.md
+  SIGNING.md
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
