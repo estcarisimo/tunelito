@@ -98,7 +98,7 @@ fn windows_layout_under_a_fake_root_refuses_execute() {
     assert!(config.contains("Match User tunelito"));
     assert!(config.contains("Subsystem sftp sftp-server.exe"));
     assert!(config.contains("MaxSessions 10"));
-    let keys = fs::read_to_string(root.join("Users/tunelito/.ssh/authorized_keys")).unwrap();
+    let keys = fs::read_to_string(root.join("ProgramData/ssh/tunelito_authorized_keys")).unwrap();
     assert!(keys.contains("ssh-ed25519"));
     let body: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&result).unwrap()).unwrap();

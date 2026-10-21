@@ -124,7 +124,7 @@ pub fn managed_paths(os: OsKind) -> ManagedPaths {
         },
         // UNTESTED ON CI: Windows OpenSSH optional-capability paths.
         OsKind::Windows => ManagedPaths {
-            authorized_keys: r"C:\Users\tunelito\.ssh\authorized_keys".into(),
+            authorized_keys: r"C:\ProgramData\ssh\tunelito_authorized_keys".into(),
             dropin: r"C:\ProgramData\ssh\sshd_config".into(),
             hello_dir: r"C:\ProgramData\tunelito\hellos".into(),
             user_home: r"C:\Users\tunelito".into(),

@@ -24,7 +24,7 @@ function Show-Setup {
     }
     foreach ($path in @(
             'C:\Users\tunelito',
-            'C:\Users\tunelito\.ssh\authorized_keys',
+            'C:\ProgramData\ssh\tunelito_authorized_keys',
             'C:\ProgramData\ssh\administrators_authorized_keys'
         )) {
         if (Test-Path -LiteralPath $path) {

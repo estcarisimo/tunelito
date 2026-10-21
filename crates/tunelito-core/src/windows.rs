@@ -18,7 +18,9 @@ pub const MARKER_END: &str = "# END tunelito";
 pub const SSHD_CONFIG: &str = r"C:\ProgramData\ssh\sshd_config";
 pub const ADMIN_KEYS: &str = r"C:\ProgramData\ssh\administrators_authorized_keys";
 pub const USER_HOME: &str = r"C:\Users\tunelito";
-pub const USER_KEYS: &str = r"C:\Users\tunelito\.ssh\authorized_keys";
+/// Not the profile `.ssh` file. Windows adds an app-package access entry to
+/// the profile directory, and sshd then ignores the key.
+pub const USER_KEYS: &str = r"C:\ProgramData\ssh\tunelito_authorized_keys";
 pub const USER_SSH_DIR: &str = r"C:\Users\tunelito\.ssh";
 pub const HELLO_DIR: &str = r"C:\ProgramData\tunelito\hellos";
 pub const STATE_DIR: &str = r"C:\ProgramData\tunelito";
@@ -27,10 +29,9 @@ pub const RESULT_FILE: &str = r"C:\ProgramData\tunelito\result.json";
 pub const PRIV_INSTALL: &str = r"C:\ProgramData\tunelito\bin\tunelito-priv.exe";
 pub const TASK_NAME: &str = "TunelitoPriv";
 
-/// OpenSSH ignores `~\.ssh\authorized_keys` when the account is an administrator
-/// and reads `administrators_authorized_keys` instead. `tunelito` is created
-/// outside that group. An account that already was an administrator keeps the
-/// administrators file.
+/// OpenSSH ignores a profile key file: the profile directory carries an
+/// app-package access entry sshd will not accept. Administrators keep the
+/// shared administrators file. Everyone else uses the ProgramData file.
 pub fn authorized_keys_path(account_is_admin: bool) -> &'static str {
     if account_is_admin {
         ADMIN_KEYS
@@ -136,7 +137,7 @@ fn match_block() -> String {
         "{MARKER_BEGIN}\n\
          # Managed by tunelito. Safe to delete; the app recreates it.\n\
          Match User {DEDICATED_USER}\n    \
-         AuthorizedKeysFile C:/Users/tunelito/.ssh/authorized_keys\n    \
+         AuthorizedKeysFile C:/ProgramData/ssh/tunelito_authorized_keys\n    \
          PasswordAuthentication no\n    \
          KbdInteractiveAuthentication no\n    \
          PubkeyAuthentication yes\n    \
@@ -272,17 +273,6 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
             "acl_profile",
             &acl_script(
                 USER_HOME,
-                &[
-                    "*S-1-5-18:(OI)(CI)(F)",
-                    "*S-1-5-32-544:(OI)(CI)(F)",
-                    "tunelito:(OI)(CI)(F)",
-                ],
-            ),
-        ));
-        steps.push(ps(
-            "acl_ssh_dir",
-            &acl_script(
-                USER_SSH_DIR,
                 &[
                     "*S-1-5-18:(OI)(CI)(F)",
                     "*S-1-5-32-544:(OI)(CI)(F)",
