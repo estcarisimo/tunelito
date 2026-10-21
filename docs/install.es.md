@@ -10,6 +10,8 @@ Esta es la computadora a la que querés entrar. Un archivo, un pedido, pegar la 
 
 Bajá `tunelito.exe` y abrilo. Aceptá el único pedido de UAC. Pegá la clave. Tocá el botón.
 
+La página para mandarle: [Para vos](guia.md).
+
 Hay un instalador, y es opcional. No hace falta el menú Inicio.
 
 ## macOS

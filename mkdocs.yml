@@ -38,6 +38,7 @@ theme:
 
 nav:
   - Home: index.md
+  - For the person at the computer: guia.md
   - Install on this computer: install.md
   - Connect with SSH: connect.md
   - Security: security.md
@@ -69,6 +70,7 @@ plugins:
           site_description: Llegá a la computadora de alguien a quien querés ayudar, a través de NAT o CGNAT
           nav_translations:
             Home: Inicio
+            For the person at the computer: Para vos
             Install on this computer: Instalar en esta computadora
             Connect with SSH: Conectarse por SSH
             Security: Seguridad

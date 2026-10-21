@@ -14,9 +14,7 @@ Claude Code por SSH, y los dispositivos USB, son una forma de usar esa sesión.
 
 ## En la computadora de esa persona
 
-1. Bajá `tunelito.exe`, arrastrá la app desde el `.dmg`, o instalá el `.deb` / AppImage.
-2. Abrilo. Aceptá el único pedido de administrador.
-3. Pegá la clave. Tocá el botón. Copiá o compartí la dirección.
+Mandale [Para vos](guia.md). Una página, con las pantallas.
 
 ## En la tuya
 

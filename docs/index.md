@@ -14,9 +14,7 @@ Claude Code over SSH, and USB devices, are one way to use that session.
 
 ## On their computer
 
-1. Download `tunelito.exe`, drag the app out of the `.dmg`, or install the `.deb` / AppImage.
-2. Open it. Accept the one administrator prompt.
-3. Paste the key. Press the button. Copy or share the address.
+Send them <a href="es/guia/">Para vos</a>. One page, in Spanish, with the screens.
 
 ## On yours
 

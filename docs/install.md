@@ -10,6 +10,8 @@ This is the computer you want to reach. One file, one prompt, paste the key.
 
 Download `tunelito.exe` and open it. Accept the one UAC prompt. Paste the key. Press the button.
 
+The page to send them: <a href="../es/guia/">Para vos</a>.
+
 An installer exists and is optional. You do not need the Start menu.
 
 ## macOS
