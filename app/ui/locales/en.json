@@ -45,7 +45,7 @@
     "waiting": "Opening the tunnel…",
     "off_hint": "Turn it on to get a name you can send.",
     "snippet": "Text for your helper's SSH config",
-    "snippet_help": "Your helper can paste this, or run tunelito-connect with the name above.",
+    "snippet_help": "They paste this into ~/.ssh/config, install cloudflared, then run ssh with that name. Or they add the name in Claude Desktop.",
     "copy_snippet": "Copy SSH config"
   },
   "keys": {
@@ -75,7 +75,7 @@
     "asn": "ASN",
     "rdns": "Reverse DNS",
     "os": "Operating system",
-    "no_hello": "No hello from the helper yet.",
+    "no_hello": "No client info.",
     "unmatched_hello": "A hello arrived that did not match a session."
   },
   "settings": {

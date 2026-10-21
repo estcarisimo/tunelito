@@ -20,10 +20,10 @@ The pictures above are the real interface with sample data. They are not a live 
 - Paste the helper's public key (the one they sent you, for example on WhatsApp). Each key shows its SHA256 fingerprint, comment, and the date it was added.
 - While the switch is on, Tunelito prepares OpenSSH with an SFTP subsystem and `MaxSessions` of at least 10, which Claude Desktop needs.
 - Remote access uses a dedicated account named `tunelito`. That account is not an administrator.
-- A Cloudflare **quick tunnel** (`cloudflared tunnel --url ssh://localhost:22`) with no Cloudflare account. The app shows the `trycloudflare.com` name, a Copy button, and a ready-to-paste SSH config snippet.
+- A Cloudflare **quick tunnel** (`cloudflared tunnel --url ssh://localhost:22`) with no Cloudflare account. The app shows the `trycloudflare.com` name, a Copy button, and a ready-to-paste `~/.ssh/config` block for ordinary OpenSSH.
 - The switch turns itself off (2 hours by default, from 15 minutes to 24 hours). Nothing starts at boot.
 - A **someone is connected** indicator, and a list of sessions with a green dot while the session is open and a gray dot after it ends.
-- An optional helper "hello" that reports a public IP, ASN, reverse DNS, and OS. The host labels those fields **reported by the client (unverified)**. Through the tunnel, sshd only sees `127.0.0.1`.
+- An optional helper "hello", sent by `tunelito-connect` if you want it, that reports a public IP, ASN, reverse DNS, and OS. The host labels those fields **reported by the client (unverified)**. A session with no hello still shows the key fingerprint and the times, and says **no client info**. Through the tunnel, sshd only sees `127.0.0.1`.
 
 ## 🛡️ Security
 
@@ -43,32 +43,37 @@ The longer write-up is [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). To report a
 
 ## 🚀 Quick Start
 
-You need two computers: this one (the **host**, with the window) and the helper's.
+You need two computers: this one (the **host**, with the window) and the helper's. The helper uses ordinary OpenSSH and `cloudflared`. The small `tunelito-connect` program is optional.
 
 **On the helper's computer**
 
-```bash
-cargo install --path crates/tunelito-connect
-tunelito-connect
-```
+Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and leave it on `PATH` (`brew install cloudflared`, the Debian package from Cloudflare, or `winget install --id Cloudflare.cloudflared`).
 
-That prints a public key. Send **only that line** to the person at the host. Never send the private file `~/.ssh/tunelito_ed25519`.
+If you do not already have an ed25519 key, create one with OpenSSH. Send only the public line. Never send the private file.
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -C "helper"
+cat ~/.ssh/id_ed25519.pub
+```
 
 **On the host**
 
-1. Install the Tunelito package for your system (`.deb`, `.msi` / `.exe`, or `.dmg` from a release), or run it from a checkout with `cargo tauri dev` inside `app/`.
-2. Paste the public key and press **Add key**. Check the fingerprint with your helper if you want to be sure the message was not altered.
-3. Press the switch, read the confirmation, and turn it on. Approve the administrator prompt. Tunelito uses it to install or start OpenSSH and to create the `tunelito` account.
-4. Copy the `trycloudflare.com` name and send it back.
+1. Install Tunelito for your system. The longer notes are in the [docs](https://estcarisimo.github.io/tunelito/): Debian, Windows, and macOS.
+2. Paste the public key and press **Add key**. Compare the fingerprint with your helper if you want to be sure the message was not altered.
+3. Press the switch, read the confirmation, and turn it on. Approve the administrator prompt. On Linux, Tunelito uses it to install or start OpenSSH and to create the `tunelito` account.
+4. Press **Copy SSH config** and send that block back.
 
 **Back on the helper's computer**
 
+Paste the block into `~/.ssh/config`. It sets `User tunelito` and `ProxyCommand cloudflared access ssh --hostname %h`. Then:
+
 ```bash
-tunelito-connect connect the-name.trycloudflare.com
 ssh the-name.trycloudflare.com
 ```
 
-`connect` writes a `Host` block into `~/.ssh/config` and sends the hello. `cloudflared` must be on `PATH` (`tunelito-connect install-cloudflared` downloads a checksum-checked build).
+Or add that same name as an SSH environment in Claude Desktop. macOS and Linux Desktop use OpenSSH and read `~/.ssh/config`. On Windows, Desktop's built-in SSH client does not, and switching it to system OpenSSH **needs verification**. See [docs/CLAUDE_DESKTOP.md](docs/CLAUDE_DESKTOP.md).
+
+If the public key you sent is not `~/.ssh/id_ed25519.pub`, change the `IdentityFile` line in the block so it points at the matching private key.
 
 ## 📖 Usage
 
@@ -79,31 +84,46 @@ ssh the-name.trycloudflare.com
 | Switch | On prepares SSH and opens the tunnel. Off kills the tunnel and pulls the managed keys out of `authorized_keys`. |
 | Timer | How long until it turns off by itself. The choice is kept. |
 | Forget keys | When checked, turning off also removes the keys from this app. Off by default: the keys stay in the list, but they cannot be used until you turn the switch on again. |
-| Copy | Copies the tunnel name, or the SSH config snippet. |
+| Copy | Copies the tunnel name, or the `~/.ssh/config` block. |
 | Remove | Drops one key from the list. If the switch is on, that key is removed from `authorized_keys` as well. |
-| Connections | One row per SSH session seen in the OpenSSH log, plus a hello when the helper sent one. |
+| Connections | One row per SSH session: green while it is open, gray after it ends, with the key fingerprint and the start and end times. With no hello, the row says **no client info**. |
 
 Closing the window turns access off. Opening the app later does **not** turn it back on.
 
 The Spanish copy uses Rioplatense voseo ("Dejá", "Encendelo", "conocés").
 
-### The helper CLI
+### Connecting
 
-| Command | What it does |
-| --- | --- |
-| `tunelito-connect` | Same as `key`. Creates `~/.ssh/tunelito_ed25519` (mode `0600`) if it is missing, and prints the public key. It never overwrites an existing key. |
-| `tunelito-connect install HOST` | Writes the managed `Host` block for that `trycloudflare.com` name. |
-| `tunelito-connect hello --hostname HOST` | Sends the unverified hello. |
-| `tunelito-connect connect HOST` | Installs the block, sends the hello, and prints the snippet. |
-| `tunelito-connect install-cloudflared` | Downloads the pinned `cloudflared` release after checking its SHA256. |
+The block the Copy button produces is ordinary OpenSSH. The helper pastes it into `~/.ssh/config` and runs `ssh` with that name. `cloudflared` has to be on their `PATH`, because the block's `ProxyCommand` is `cloudflared access ssh --hostname %h`.
 
-The `Host` block uses `ProxyCommand cloudflared access ssh --hostname %h`, `IdentitiesOnly yes`, and `StrictHostKeyChecking accept-new`. A `LocalCommand` runs the hello and ends with `|| true`, so a failed hello does not block the SSH session. `--once` skips a repeat hello for ten minutes.
+`StrictHostKeyChecking accept-new` trusts the host key the first time that name is seen. Quick-tunnel names are new each time the switch is turned on.
 
 ### Claude Desktop
 
-Claude Desktop on macOS and Linux uses OpenSSH and honors `~/.ssh/config`, so a host installed by `tunelito-connect` is the one Claude will use. Add that host in Claude Desktop's SSH environments and connect as `tunelito`.
+Claude Desktop on macOS and Linux uses OpenSSH and honors `~/.ssh/config`, so the pasted block is the one Desktop will use. Add that hostname as an SSH environment and connect as `tunelito`.
 
-On Windows, Claude Desktop ships its own SSH client and does not, by default, read OpenSSH's config. Switching it to the system OpenSSH client is required and **needs verification** against the Desktop build you have. The steps are written up, with that caveat, in [docs/CLAUDE_DESKTOP.md](docs/CLAUDE_DESKTOP.md).
+On Windows, Claude Desktop ships its own SSH client and does not, by default, read OpenSSH's config. Switching it to the system OpenSSH client is required and **needs verification** against the Desktop build you have. See [docs/CLAUDE_DESKTOP.md](docs/CLAUDE_DESKTOP.md).
+
+### Optional: `tunelito-connect`
+
+You do not need this to connect. It is a small extra for two jobs: creating a key if you would rather not run `ssh-keygen` yourself, and sending the unverified hello (public IP, ASN, reverse DNS, OS).
+
+```bash
+cargo install --path crates/tunelito-connect
+tunelito-connect
+```
+
+That prints a public key from `~/.ssh/tunelito_ed25519` (mode `0600`). It never overwrites an existing key. Send only the public line.
+
+| Command | What it does |
+| --- | --- |
+| `tunelito-connect` | Same as `key`. |
+| `tunelito-connect install HOST` | Writes the managed `Host` block, and adds a `LocalCommand` that sends the hello. |
+| `tunelito-connect hello --hostname HOST` | Sends the unverified hello once. |
+| `tunelito-connect connect HOST` | Installs the block and sends the hello. |
+| `tunelito-connect install-cloudflared` | Downloads the pinned `cloudflared` release after checking its SHA256. |
+
+The hello's `LocalCommand` ends with `|| true`, so a failed hello does not block SSH. `--once` skips a repeat hello for ten minutes. A plain `ssh` session that never runs it still shows up on the host, with **no client info**.
 
 Claude Code's remote installer uses SFTP and several SSH channels. That is why Tunelito raises `MaxSessions` to at least 10 and enables the SFTP subsystem. The install lands under `/home/tunelito/.claude/remote/` (or the equivalent home on Windows and macOS), **not** in the personal home directory of the person at the keyboard.
 
@@ -131,18 +151,17 @@ On Debian, the OpenSSH drop-in is `/etc/ssh/sshd_config.d/00-tunelito.conf`. It 
 
 ```
 helper laptop                         this computer
-tunelito-connect                      Tunelito window (Tauri)
-  ed25519 key                           Rust core: keys, timer, sessions
-  ~/.ssh/config                         tunelito-priv (root, Linux)
+ssh + ~/.ssh/config                   Tunelito window (Tauri)
+  cloudflared access ssh                Rust core: keys, timer, sessions
+       |                                tunelito-priv (root, Linux)
        |                                  openssh + user tunelito
-       |  cloudflared access ssh          cloudflared quick tunnel
        +------------ trycloudflare ------- ssh://127.0.0.1:22
 ```
 
 | Crate | Role |
 | --- | --- |
 | `tunelito-core` | Keys, sshd plans, the on/off state machine, log parsing, hello parsing, checksums. No service is started from here. |
-| `tunelito-connect` | The helper CLI. |
+| `tunelito-connect` | Optional helper CLI: key generation and the unverified hello. |
 | `tunelito-priv` | Linux-only root helper. `--execute` is refused unless the root is `/` and the process is root. |
 | `app` | The window. It applies the core's effects: prepare SSH, start or stop the tunnel, record sessions. |
 
@@ -159,6 +178,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cd app && npm ci && npm run build
+python3 -m venv .docs-venv && .docs-venv/bin/pip install -r docs/requirements.txt
+.docs-venv/bin/mkdocs build --strict
 ```
 
 The frontend can be opened without the window:
@@ -177,33 +198,29 @@ A local Linux run of the window needs `tunelito-priv` next to the binary (or `TU
 
 ## 📊 Example Output
 
-Helper, first run:
+The public key the helper sends:
 
 ```text
-$ tunelito-connect
-Created /home/ada/.ssh/tunelito_ed25519
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... tunelito
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... helper
 ```
 
-Host, after the switch is on:
+Host, after the switch is on, the block **Copy SSH config** produces:
 
 ```text
-maple-river-42.trycloudflare.com
-```
-
-Snippet the Copy button produces (markers abbreviated):
-
-```text
+# BEGIN tunelito maple-river-42.trycloudflare.com
 Host maple-river-42.trycloudflare.com
-  HostName maple-river-42.trycloudflare.com
-  User tunelito
-  IdentityFile ~/.ssh/tunelito_ed25519
-  IdentitiesOnly yes
-  StrictHostKeyChecking accept-new
-  ProxyCommand cloudflared access ssh --hostname %h
+HostName maple-river-42.trycloudflare.com
+User tunelito
+IdentityFile ~/.ssh/id_ed25519
+IdentitiesOnly yes
+StrictHostKeyChecking accept-new
+ProxyCommand cloudflared access ssh --hostname %h
+# END tunelito maple-river-42.trycloudflare.com
 ```
 
-A hello stored by the host, with the verification field forced:
+The helper then runs `ssh maple-river-42.trycloudflare.com`.
+
+A session with no hello lists the fingerprint and the times, and says no client info. If `tunelito-connect hello` ran, the panel adds a block labeled reported by the client (unverified). The address OpenSSH recorded stays `127.0.0.1`. The hello JSON always stores:
 
 ```json
 {
@@ -214,8 +231,6 @@ A hello stored by the host, with the verification field forced:
   "verification": "unverified"
 }
 ```
-
-The connections panel shows that block under **Reported by the client (unverified)**. The address OpenSSH recorded stays `127.0.0.1`.
 
 ## 🤝 Contributing
 

@@ -128,12 +128,10 @@ function connectedSample() {
     `Host ${host}`,
     `HostName ${host}`,
     "User tunelito",
-    "IdentityFile ~/.ssh/tunelito_ed25519",
+    "IdentityFile ~/.ssh/id_ed25519",
     "IdentitiesOnly yes",
     "StrictHostKeyChecking accept-new",
     "ProxyCommand cloudflared access ssh --hostname %h",
-    "PermitLocalCommand yes",
-    "LocalCommand sh -c 'command -v tunelito-connect >/dev/null 2>&1 && tunelito-connect hello --hostname %h --quiet --once || true'",
     `# END tunelito ${host}`,
     "",
   ].join("\n");
@@ -300,7 +298,9 @@ function switchLabel() {
 }
 
 function renderHello(hello) {
-  if (!hello) return el("p", { class: "meta", text: t("sessions.no_hello") });
+  if (!hello) {
+    return el("p", { class: "meta", "data-testid": "no-client-info", text: t("sessions.no_hello") });
+  }
   const rows = [
     ["sessions.ip", hello.public_ip],
     ["sessions.asn", hello.asn],

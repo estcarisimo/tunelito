@@ -45,7 +45,7 @@
     "waiting": "Abriendo el túnel…",
     "off_hint": "Encendelo para obtener un nombre que puedas enviar.",
     "snippet": "Texto para la configuración SSH de quien te ayuda",
-    "snippet_help": "Quien te ayuda puede pegar esto, o ejecutar tunelito-connect con el nombre de arriba.",
+    "snippet_help": "Quien te ayuda pega esto en ~/.ssh/config, instala cloudflared, y después corre ssh con ese nombre. O agrega el nombre en Claude Desktop.",
     "copy_snippet": "Copiar configuración SSH"
   },
   "keys": {
@@ -75,7 +75,7 @@
     "asn": "ASN",
     "rdns": "DNS inverso",
     "os": "Sistema operativo",
-    "no_hello": "Quien ayuda todavía no envió un hello.",
+    "no_hello": "Sin datos del cliente.",
     "unmatched_hello": "Llegó un hello que no coincide con una sesión."
   },
   "settings": {

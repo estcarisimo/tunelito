@@ -101,6 +101,8 @@ try {
   check("hostname after on", text.includes("maple-river-42.trycloudflare.com"), text.slice(0, 700));
   check("someone connected no", text.includes("Someone is connected: No"), text.slice(0, 700));
   check("snippet", text.includes("ProxyCommand cloudflared access ssh --hostname %h"), "missing snippet");
+  check("plain ssh user", text.includes("User tunelito"), "missing user");
+  check("no hello hook in snippet", !text.includes("LocalCommand"), text);
 
   await clickTestId(page, "copy-host");
   await sleep(100);
@@ -114,12 +116,15 @@ try {
   check("loopback note", text.includes("127.0.0.1"), text);
   check("green and gray", (await count(page, ".dot.live")) >= 2 && (await count(page, ".dot:not(.live)")) >= 1, "dots");
   check("active and ended", text.includes("Active") && text.includes("Ended"), text);
+  check("no client info", text.includes("No client info."), text);
+  check("fingerprint without hello", (await count(page, "[data-testid='no-client-info']")) >= 1, "missing no-client-info row");
   await shot(page, new URL("tunelito-en.png", OUT), 1280);
 
   await go(page, `${BASE}?preview=connected&lang=es`);
   text = await bodyText(page);
   check("spanish connected", text.includes("Alguien está conectado: Sí"), text.slice(0, 400));
   check("spanish unverified", text.includes("Informado por el cliente (sin verificar)"), text);
+  check("spanish no client info", text.includes("Sin datos del cliente."), text);
   await shot(page, new URL("tunelito-es.png", OUT), 1280);
 
   await page.send("Emulation.setDeviceMetricsOverride", {

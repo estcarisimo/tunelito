@@ -1,0 +1,6 @@
+# Documentation site. CI runs `mkdocs build --strict` with these pins.
+# .github/workflows/pages.yml publishes the same build to GitHub Pages.
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+mkdocs-static-i18n==1.3.0
+pymdown-extensions==12.0.1
