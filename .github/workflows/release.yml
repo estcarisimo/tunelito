@@ -26,7 +26,7 @@ jobs:
             bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -44,7 +44,7 @@ jobs:
       - name: Helper binaries
         run: cargo build --release -p tunelito-connect -p tunelito-priv
       - name: Bundle the host app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Placeholders. Leave the secrets empty to skip signing.
@@ -71,7 +71,7 @@ jobs:
           prerelease: false
           args: --bundles ${{ matrix.bundles }}
       - name: Upload helper binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helpers-${{ matrix.os }}
           path: |
