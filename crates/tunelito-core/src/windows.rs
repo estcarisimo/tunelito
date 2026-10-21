@@ -76,7 +76,8 @@ impl WindowsFilePlan {
 }
 
 /// Rewrite `sshd_config`. Foreign lines stay. `MaxSessions` is raised before the
-/// first `Match` (OpenSSH keeps the first value). The `tunelito` Match is last.
+/// first `Match` (OpenSSH keeps the first value). The `tunelito` Match comes
+/// before any other Match so its `AuthorizedKeysFile` wins for that user.
 pub fn rewrite_sshd_config(
     existing: &str,
     set_global_max_sessions: bool,
@@ -109,14 +110,18 @@ pub fn rewrite_sshd_config(
     {
         lines.insert(first_match, "Subsystem sftp sftp-server.exe".into());
     }
+    let first_match = lines
+        .iter()
+        .position(|line| is_match_line(line))
+        .unwrap_or(lines.len());
+    let block_lines: Vec<String> = match_block().lines().map(|line| line.to_string()).collect();
+    for (offset, line) in block_lines.into_iter().enumerate() {
+        lines.insert(first_match + offset, line);
+    }
     let mut body = lines.join("\n");
-    if !body.is_empty() && !body.ends_with('\n') {
+    if !body.ends_with('\n') {
         body.push('\n');
     }
-    if !body.is_empty() && !body.ends_with("\n\n") {
-        body.push('\n');
-    }
-    body.push_str(&match_block());
     validate_match_block(&match_block())?;
     if body.to_ascii_lowercase().contains("new-netfirewallrule") {
         return Err(Error::unsafe_sshd_dropin());
@@ -264,7 +269,7 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
     if account_is_admin {
         steps.push(ps(
             "acl_authorized_keys",
-            &acl_script(ADMIN_KEYS, &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)"]),
+            &acl_script(ADMIN_KEYS, &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)"], true),
         ));
     } else {
         // sshd runs as SYSTEM. A grant without parentheses around the right
@@ -278,6 +283,7 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
                     "*S-1-5-32-544:(OI)(CI)(F)",
                     "tunelito:(OI)(CI)(F)",
                 ],
+                false,
             ),
         ));
         steps.push(ps(
@@ -285,6 +291,7 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
             &acl_script(
                 USER_KEYS,
                 &["*S-1-5-18:(F)", "*S-1-5-32-544:(F)", "tunelito:(R)"],
+                true,
             ),
         ));
     }
@@ -293,12 +300,13 @@ pub fn acl_commands(account_is_admin: bool) -> Vec<CommandStep> {
         &acl_script(
             STATE_DIR,
             &["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(F)"],
+            false,
         ),
     ));
     steps
 }
 
-fn acl_script(path: &str, grants: &[&str]) -> String {
+fn acl_script(path: &str, grants: &[&str], set_owner: bool) -> String {
     let mut script = format!(
         "$path = '{path}'; \
          if (-not (Test-Path -LiteralPath $path)) {{ throw \"missing $path\" }}; \
@@ -313,6 +321,13 @@ fn acl_script(path: &str, grants: &[&str]) -> String {
             " & $icacls $path /grant:r '{grant}'; \
              if ($LASTEXITCODE -ne 0) {{ throw \"icacls grant failed on $path\" }};"
         ));
+    }
+    if set_owner {
+        // sshd accepts the key only when the owner is SYSTEM, Administrators, or the account.
+        script.push_str(
+            " & $icacls $path /setowner *S-1-5-18; \
+             if ($LASTEXITCODE -ne 0) { throw \"icacls owner failed on $path\" };",
+        );
     }
     script
 }
@@ -425,7 +440,7 @@ Match Group administrators\n\
     AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys\n";
 
     #[test]
-    fn raises_maxsessions_before_match_and_appends_tunelito_last() {
+    fn raises_maxsessions_before_match_and_puts_tunelito_first() {
         let once = rewrite_sshd_config(STOCK, true, false).unwrap();
         let twice = rewrite_sshd_config(&once, true, false).unwrap();
         assert_eq!(once, twice);
@@ -435,8 +450,8 @@ Match Group administrators\n\
         assert!(once.contains("Match Group administrators\n"));
         let tunelito = once.find("Match User tunelito").unwrap();
         let admins = once.find("Match Group administrators").unwrap();
-        assert!(admins < tunelito);
-        assert!(once.trim_end().ends_with("# END tunelito"));
+        assert!(tunelito < admins);
+        assert!(once.contains("# END tunelito"));
         assert!(!once.to_ascii_lowercase().contains("forcecommand"));
         assert!(!once.to_ascii_lowercase().contains("new-netfirewallrule"));
     }
