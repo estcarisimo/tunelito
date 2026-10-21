@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Tunelito</vendor>
+  <vendor_url>https://github.com/estcarisimo/tunelito</vendor_url>
+  <action id="io.github.estcarisimo.tunelito.priv">
+    <description>Turn Tunelito remote access on or off</description>
+    <description xml:lang="es">Encender o apagar el acceso remoto de Tunelito</description>
+    <message>Tunelito needs an administrator to prepare SSH and the tunelito account.</message>
+    <message xml:lang="es">Tunelito necesita un administrador para preparar SSH y la cuenta tunelito.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/tunelito/tunelito-priv</annotate>
+  </action>
+</policyconfig>

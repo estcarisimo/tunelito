@@ -544,12 +544,19 @@ fn priv_binary() -> Option<PathBuf> {
     };
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
+    // On Linux the packaged path comes first: the polkit action names it
+    // exactly, so pkexec shows the Tunelito prompt and the one-prompt rule
+    // applies. Elsewhere that path means nothing (on Windows it is C:\usr).
+    let packaged =
+        cfg!(target_os = "linux").then(|| PathBuf::from(tunelito_core::linux::PRIV_PATH));
     let candidates = [
         dir.join(name),
         dir.join("..").join("lib").join("tunelito").join(name),
-        PathBuf::from("/usr/lib/tunelito").join(name),
     ];
-    candidates.into_iter().find(|path| path.exists())
+    packaged
+        .into_iter()
+        .chain(candidates)
+        .find(|path| path.exists())
 }
 
 fn euid_is_root() -> bool {

@@ -67,3 +67,5 @@ On Windows the first UAC prompt registers an on-demand scheduled task, `Tunelito
 - Every elevated run resets these permissions, so an older build that left them writable is repaired on the next switch.
 
 On macOS each switch asks for an administrator password through `osascript`, which runs `tunelito-priv` as root. Keep the app in `/Applications`, so only an administrator can replace the helper that prompt runs. The helper refuses to write `authorized_keys` through a link in the `tunelito` home, on macOS and on Linux, because that account's shell is in the helper's hands while access is on.
+
+On Linux the polkit rule plays the role of the Windows task: after one approved setup, the desktop user's processes can run `/usr/lib/tunelito/tunelito-priv` as root without a password. Through pkexec the helper only runs `--execute` against `/`, and it accepts only a validated key list and drop-in, so the reach is the same as the switch: add or remove keys for `tunelito` and start or stop sshd. Delete `/etc/polkit-1/rules.d/49-tunelito.rules` to get the password prompt back.

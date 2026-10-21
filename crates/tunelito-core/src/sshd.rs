@@ -53,6 +53,26 @@ pub fn render_dropin(set_global_max_sessions: bool, add_sftp: bool) -> String {
     out
 }
 
+/// True when `sshd_config` includes `/etc/ssh/sshd_config.d/` before any
+/// `Match`. Debian 11+, Fedora, current Arch, and macOS 13+ ship that line.
+/// Without it the Tunelito drop-in is ignored, so the helper refuses.
+pub fn includes_dropins(config: &str) -> bool {
+    for raw in config.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("match ") {
+            return false;
+        }
+        if lower.starts_with("include ") && line.contains("/etc/ssh/sshd_config.d/") {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn dropin_decisions(effective: &SshdEffective, openssh_installed: bool) -> (bool, bool) {
     let set_global = match effective.max_sessions {
         Some(n) if n >= 10 => false,

@@ -74,6 +74,8 @@ pub struct Probe {
     pub macos_remote_login_ours: bool,
     /// Tunelito created `com.apple.access_ssh` and must delete it again.
     pub macos_access_group_ours: bool,
+    /// Which package manager installs OpenSSH on this Linux system.
+    pub linux_packages: crate::linux::Packages,
 }
 
 impl Probe {
@@ -96,6 +98,7 @@ impl Probe {
             macos_access_group: false,
             macos_remote_login_ours: false,
             macos_access_group_ours: false,
+            linux_packages: crate::linux::Packages::Apt,
         }
     }
 
@@ -147,17 +150,9 @@ pub fn install_commands(probe: &Probe) -> Result<Vec<CommandStep>, Error> {
     match probe.os {
         OsKind::Linux => {
             if !probe.openssh_installed {
-                let mut install = CommandStep::new(
-                    OsKind::Linux,
-                    "apt-get",
-                    strs(&["install", "-y", "openssh-server"]),
-                    "install_openssh",
-                );
-                install
-                    .env
-                    .push(("DEBIAN_FRONTEND".into(), "noninteractive".into()));
-                steps.push(install);
-                // The Debian package enables ssh at boot. Undo that; Tunelito starts it on demand.
+                steps.push(probe.linux_packages.install_openssh()?);
+                // Debian's package enables ssh at boot. Undo that on every distro;
+                // Tunelito starts it on demand.
                 steps.push(CommandStep::new(
                     OsKind::Linux,
                     "systemctl",

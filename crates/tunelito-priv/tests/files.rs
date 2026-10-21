@@ -179,3 +179,32 @@ fn macos_flag_writes_the_macos_layout_and_refuses_execute_off_a_mac() {
     assert!(!execute.status.success());
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn through_pkexec_files_only_mode_is_refused() {
+    let dir = std::env::temp_dir().join(format!("tunelito-priv-pk-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let request_path = dir.join("request.json");
+    fs::write(
+        &request_path,
+        r#"{"authorized_key_lines":[],"write_keys":false}"#,
+    )
+    .unwrap();
+    let root = dir.join("root");
+    let output = Command::new(env!("CARGO_BIN_EXE_tunelito-priv"))
+        .env("PKEXEC_UID", "1000")
+        .args([
+            "apply",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("pkexec"));
+    assert!(!root.exists());
+    let _ = fs::remove_dir_all(&dir);
+}

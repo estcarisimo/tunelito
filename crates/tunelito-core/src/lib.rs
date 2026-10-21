@@ -14,6 +14,7 @@ pub mod error;
 pub mod hello;
 pub mod host;
 pub mod keys;
+pub mod linux;
 pub mod locales;
 pub mod logs;
 pub mod macos;

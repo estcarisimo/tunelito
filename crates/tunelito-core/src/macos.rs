@@ -28,22 +28,7 @@ pub const SSHD_PLIST: &str = "/System/Library/LaunchDaemons/ssh.plist";
 
 /// macOS 13 and later ship `Include /etc/ssh/sshd_config.d/*` at the top of
 /// `sshd_config`. Without it the drop-in would be ignored, so setup refuses.
-pub fn includes_dropins(config: &str) -> bool {
-    for raw in config.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("match ") {
-            return false;
-        }
-        if lower.starts_with("include ") && line.contains("/etc/ssh/sshd_config.d/") {
-            return true;
-        }
-    }
-    false
-}
+pub use crate::sshd::includes_dropins;
 
 /// Create the hidden, non-admin `tunelito` account. The password is random and
 /// never stored: the account logs in with a key only.
