@@ -3,40 +3,12 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use rand::rngs::SysRng;
-use rand::RngExt;
+use rand_core::{Rng, UnwrapErr};
 use serde::{Deserialize, Serialize};
-use ssh_key::{Algorithm, HashAlg, LineEnding, PrivateKey, PublicKey};
+use ssh_key::private::Ed25519Keypair;
+use ssh_key::{HashAlg, LineEnding, PrivateKey, PublicKey};
 
 use crate::error::Error;
-
-/// `ssh-key` 0.6 still asks for `rand_core` 0.6. `rand` 0.10 renamed `OsRng`
-/// to `SysRng` and speaks `rand_core` 0.10, so this forwards those bytes.
-struct SshOsRng;
-
-impl rand_core::RngCore for SshOsRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut buf = [0u8; 4];
-        self.fill_bytes(&mut buf);
-        u32::from_le_bytes(buf)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut buf = [0u8; 8];
-        self.fill_bytes(&mut buf);
-        u64::from_le_bytes(buf)
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        rand::rand_core::UnwrapErr(SysRng).fill(dest);
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-impl rand_core::CryptoRng for SshOsRng {}
 
 pub const DEDICATED_USER: &str = "tunelito";
 
@@ -131,8 +103,13 @@ pub fn ensure_keypair(private_path: &Path, comment: &str) -> Result<(ParsedKey, 
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
         }
     }
-    let mut key = PrivateKey::random(&mut SshOsRng, Algorithm::Ed25519).map_err(Error::ssh_key)?;
-    key.set_comment(comment);
+    // `ssh-key` 0.6's `PrivateKey::random` still wants `rand_core` 0.6.
+    // The seed comes from `rand_core` 0.10 and is expanded with `from_seed`.
+    let mut seed = [0u8; 32];
+    UnwrapErr(SysRng).fill_bytes(&mut seed);
+    let keypair = Ed25519Keypair::from_seed(&seed);
+    seed.fill(0);
+    let key = PrivateKey::new(keypair.into(), comment).map_err(Error::ssh_key)?;
     let encoded = key.to_openssh(LineEnding::LF).map_err(Error::ssh_key)?;
     fs::write(private_path, encoded.as_bytes())?;
     #[cfg(unix)]

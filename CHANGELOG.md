@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Host ed25519 keys are generated with `rand_core` 0.10.
 - The host's copyable SSH block is plain OpenSSH (`User tunelito`, `ProxyCommand cloudflared access ssh --hostname %h`). `tunelito-connect` is optional, for a key and the unverified hello.
 - A session with no hello still lists the fingerprint and the times, and says no client info.
 - Docs site (MkDocs Material, English and Spanish) for install, connecting, the threat model, and an FAQ.
